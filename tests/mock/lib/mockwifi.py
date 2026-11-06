@@ -238,12 +238,12 @@ def main():
             oc = opclass(band, ht, ch)
             nr = bssid.replace(":", "") + "8f090000" + "%02x%02x%02x" % (oc, ch, phytype(band, ht))
             write(o + "/get_status.json", json.dumps({"status": "ENABLED", "bssid": bssid, "ssid": i.get("ssid", ""),
-                                                      "freq": freq, "channel": ch, "op_class": oc}) + "\n")
+                                                      "freq": freq, "channel": ch, "op_class": oc}, ensure_ascii=False) + "\n")
             script(o + "/get_clients.sh", 'exec "$MOCK_LIB/get_clients.sh" %s %d\n' % (shlex.quote(ifname), freq))
             script(o + "/del_client.sh", 'echo "del_client %s $1" >> "$MOCK_DIR/actions.log"\n' % ifname)
             write(o + "/reload.json", "{}\n")
             if E.get("SC_RRM", "1") == "1":
-                write(o + "/rrm_nr_get_own.json", json.dumps({"value": [bssid, i.get("ssid", ""), nr]}) + "\n")
+                write(o + "/rrm_nr_get_own.json", json.dumps({"value": [bssid, i.get("ssid", ""), nr]}, ensure_ascii=False) + "\n")
                 script(o + "/rrm_nr_set.sh", 'printf "%%s\\n" "$1" > "$(dirname "$0")/nr_list.state"\n'
                        'echo "rrm_nr_set %s" >> "$MOCK_DIR/actions.log"\n' % ifname)
                 script(o + "/rrm_nr_list.sh",
@@ -269,7 +269,7 @@ def main():
             write("%s/var/run/hostapd-%s.conf" % (ROOT, phy), "\n".join(conf_lines) + "\n")
             log("daemon.notice hostapd: %s: interface state COUNTRY_UPDATE->ENABLED" % phy)
 
-    write(os.path.join(ubus, "network.wireless", "status.json"), json.dumps(status, indent=1) + "\n")
+    write(os.path.join(ubus, "network.wireless", "status.json"), json.dumps(status, indent=1, ensure_ascii=False) + "\n")
     out = []
     for phy in sorted(set(d[0] for d in iwdev)):
         out.append("phy#%s" % phy[3:])

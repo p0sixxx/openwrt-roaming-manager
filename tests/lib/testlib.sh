@@ -30,7 +30,7 @@ assert_contains() {
 	case "$1" in
 	*"$2"*) return 0 ;;
 	esac
-	fail "${3:-missing text}: '$2' not found in: $(printf '%s' "$1" | head -c 1500)"
+	fail "${3:-missing text}: '$2' not found in: $(printf '%s' "$1" | tr '\n' ' ' | head -c 400)"
 }
 
 assert_not_contains() {
@@ -70,6 +70,7 @@ fx_new() {
 	fi
 	mkdir -p "$_d/root" "$_d/mock"
 	(
+		unset MOCK_LOG
 		ORM_SYSROOT="$_d/root" MOCK_DIR="$_d/mock"
 		export ORM_SYSROOT MOCK_DIR
 		fx_build "$_scen"
@@ -87,6 +88,7 @@ fx_new() {
 fx_cleanup() {
 	[ -n "${FX_BASE:-}" ] && rm -rf "$FX_BASE"
 	FX_BASE=''
+	unset MOCK_LOG
 }
 
 # Scenario variables with defaults; scenario files override them.
@@ -183,7 +185,7 @@ fx_build() {
 	. "$SCEN_DIR/$1.sh" || return 1
 	# per-test overrides: FXO_<VAR>=value
 	for _v in SC_OS SC_PKG SC_HANDLER SC_UCI_UNSUPPORTED SC_WNM SC_RRM SC_REJECT SC_WIFI_FAIL \
-		SC_FEATURES SC_WPAD SC_AVAILABLE SC_INTERNET SC_DNS SC_BASEMAC SC_KEY SC_ENC SC_SSID SC_PHYS SC_NOISE; do
+		SC_FEATURES SC_WPAD SC_PKGS SC_AVAILABLE SC_INTERNET SC_DNS SC_BASEMAC SC_KEY SC_ENC SC_SSID SC_PHYS SC_NOISE; do
 		eval "_o=\${FXO_$_v-__unset__}"
 		# shellcheck disable=SC2154
 		[ "$_o" != __unset__ ] && eval "$_v=\$_o"
@@ -307,6 +309,7 @@ fx_path() {
 rc_run() {
 	_o="$FX/out.$$" _e="$FX/err.$$"
 	PATH="$(fx_path)" ORM_COLOR=never ORM_SETTLE_MIN=0 ORM_SETTLE_TIMEOUT=4 ORM_LOCK_WAIT=2 \
+		ORM_WATCHDOG_TIMEOUT=${ORM_WATCHDOG_TIMEOUT:-60} \
 		$TEST_SH "$ORM_REPO/roamctl" "$@" </dev/null >"$_o" 2>"$_e"
 	RC=$?
 	OUT=$(cat "$_o")

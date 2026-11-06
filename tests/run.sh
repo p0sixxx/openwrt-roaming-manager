@@ -57,7 +57,8 @@ for suite in $SUITES; do
 				pass=$((pass + 1))
 			else
 				echo "FAIL"
-				sed 's/^/    | /' "$log" | tail -n 40
+				grep 'ASSERTION FAILED' "$log" | cut -c1-600 | sed 's/^/    | /'
+				grep -v 'ASSERTION FAILED' "$log" | tail -n 12 | sed 's/^/    | /'
 				failn=$((failn + 1))
 				failed_list="$failed_list $suite/$(basename "$f" .sh)/$t"
 			fi
