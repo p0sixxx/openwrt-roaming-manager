@@ -57,7 +57,7 @@ report_print_details() {
 	[ -s "$_f" ] || return 0
 	# fixed category order, then anything else in order of appearance
 	_seen=''
-	for _cat in hardware packages config hostapd 11r 11k 11v steering multiap connectivity live \
+	for _cat in hardware packages config hostapd 11r 11k 11v steering multiap connectivity clients live \
 		$(cut -d"$ORM_FS" -f1 "$_f" | awk '!s[$0]++'); do
 		list_contains "$_seen" "$_cat" && continue
 		_seen="$_seen $_cat"
@@ -84,6 +84,7 @@ report_category_title() {
 	connectivity) printf 'Connectivity' ;;
 	multiap) printf 'Multi-AP' ;;
 	live) printf 'Live roaming' ;;
+	clients) printf 'Client capabilities' ;;
 	*) printf '%s' "$1" ;;
 	esac
 }

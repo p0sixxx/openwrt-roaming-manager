@@ -10,7 +10,7 @@
 #
 # Payload (stdin of "roamctl agent apply"), $ORM_FS separated lines:
 #   orm-sync 1
-#   global  <profile> <backend> <nr_mode>
+#   global  <profile> <backend> <nr_mode> <ap_count>
 #   group   <gid> <ssid> <mdid> <ft_key_mode> <11k> <11v> <11r> <ft_mode>
 #   ftkey   <gid> <64 hex>            (secret, only over SSH stdin)
 #   dawn    <shared_key> <iv>         (secret, only if DAWN is used)
@@ -20,8 +20,8 @@ sync_payload() {
 	local _F _g _k
 	_F=$ORM_FS
 	printf 'orm-sync%s1\n' "$_F"
-	printf 'global%s%s%s%s%s%s\n' "$_F" "$(roam_get global.profile balanced)" "$_F" \
-		"$(roam_get global.steering_backend_active none)" "$_F" "$(roam_get global.nr_mode auto)"
+	printf 'global%s%s%s%s%s%s%s%s\n' "$_F" "$(roam_get global.profile balanced)" "$_F" \
+		"$(roam_get global.steering_backend_active none)" "$_F" "$(roam_get global.nr_mode auto)" "$_F" "$(roam_ap_count)"
 	for _g in $(roam_groups); do
 		printf 'group%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n' "$_F" "$_g" "$_F" "$(roam_get "$_g.ssid")" \
 			"$_F" "$(roam_get "$_g.mdid")" "$_F" "$(roam_get "$_g.ft_key_mode" local)" \
@@ -46,7 +46,7 @@ sync_payload_import() {
 	ensure_dir "$ORM_STATE"
 	: >"$_tmp"
 	_hdr=0 _end=0 _keys='' _dawn=''
-	SYNC_PROFILE='' SYNC_BACKEND='' SYNC_NRMODE=''
+	SYNC_PROFILE='' SYNC_BACKEND='' SYNC_NRMODE='' SYNC_APCOUNT=''
 	while IFS="$ORM_FS" read -r _t _a _b _c _d _e _f _g _h; do
 		case "$_t" in
 		orm-sync) [ "$_a" = 1 ] && _hdr=1 ;;
@@ -54,6 +54,8 @@ sync_payload_import() {
 			case "$_a" in conservative | balanced | aggressive | iot-safe) SYNC_PROFILE=$_a ;; *) return 1 ;; esac
 			case "$_b" in usteer | dawn | native | none) SYNC_BACKEND=$_b ;; *) return 1 ;; esac
 			case "$_c" in auto | static | backend | off) SYNC_NRMODE=$_c ;; *) return 1 ;; esac
+			is_uint "$_d" && [ "$_d" -ge 1 ] && [ "$_d" -le 64 ] || return 1
+			SYNC_APCOUNT=$_d
 			;;
 		group)
 			printf '%s' "$_a" | grep -Eq '^g_[0-9a-f]{8}$' || return 1

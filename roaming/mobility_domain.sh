@@ -30,7 +30,8 @@ mdid_openwrt_default() {
 }
 
 # All MDIDs known to be in use: other roamctl groups, other SSIDs in the
-# local wireless config, remote APs and scan results (excluding GROUP).
+# local wireless config and scan results (excluding GROUP / SSID).
+# mdid_in_use [GROUP] [SSID]
 mdid_in_use() {
 	local _skip _g _skip_ssid _s _md _ssid
 	_skip=${1:-}
@@ -39,11 +40,11 @@ mdid_in_use() {
 		roam_get "$_g.mdid"
 		echo
 	done
-	_skip_ssid=$(roam_get "$_skip.ssid")
+	_skip_ssid=${2:-$(roam_get "$_skip.ssid")}
 	for _s in $(caps_get iface.list); do
 		_md=$(caps_get "iface.$_s.uci_mobility_domain")
 		[ -n "$_md" ] || continue
-		[ -n "$_skip" ] && [ "$(caps_get "iface.$_s.ssid")" = "$_skip_ssid" ] && continue
+		[ -n "$_skip_ssid" ] && [ "$(caps_get "iface.$_s.ssid")" = "$_skip_ssid" ] && continue
 		lower "$_md"
 		echo
 	done
@@ -54,9 +55,10 @@ mdid_in_use() {
 }
 
 mdid_generate() {
+	# mdid_generate [GROUP] [SSID]
 	local _used _tries _cand
 	# mdid_generate [GROUP] -> new MDID not in use
-	_used=$(mdid_in_use "${1:-}" | tr '\n' ' ')
+	_used=$(mdid_in_use "${1:-}" "${2:-}" | tr '\n' ' ')
 	_tries=0
 	while [ "$_tries" -lt 64 ]; do
 		_cand=$(random_hex 2) || return 1
@@ -106,7 +108,7 @@ mdid_ensure() {
 		return 0
 	fi
 	if _md=$(mdid_existing_for_ifaces "$_ssid" "$@"); then
-		_used=$(mdid_in_use "$_grp" | tr '\n' ' ')
+		_used=$(mdid_in_use "$_grp" "$_ssid" | tr '\n' ' ')
 		if ! list_contains "$_used" "$_md"; then
 			log_info "Adopting existing Mobility Domain $_md for '$_ssid'"
 			printf '%s adopted' "$_md"
@@ -114,7 +116,7 @@ mdid_ensure() {
 		fi
 		log_warn "Existing Mobility Domain $_md of '$_ssid' collides with another network - generating a new one"
 	fi
-	_md=$(mdid_generate "$_grp") || return 1
+	_md=$(mdid_generate "$_grp" "$_ssid") || return 1
 	printf '%s generated' "$_md"
 }
 

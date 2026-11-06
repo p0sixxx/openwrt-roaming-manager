@@ -29,7 +29,9 @@ json_flatten() {
 		while (i <= n) {
 			c = substr(buf, i, 1)
 			if (c == "{" || c == "[") {
+				has[depth] = 1
 				depth++
+				has[depth] = 0
 				type[depth] = c
 				idx[depth] = 0
 				key[depth] = (c == "[") ? "0" : ""
@@ -37,6 +39,8 @@ json_flatten() {
 				i++; continue
 			}
 			if (c == "}" || c == "]") {
+				# empty containers are reported so their keys are known
+				if (!has[depth] && depth > 1) { depth--; print path_str() "=" (c == "]" ? "[]" : "{}"); i++; continue }
 				depth--; i++; continue
 			}
 			if (c == ",") {
@@ -63,7 +67,7 @@ json_flatten() {
 				}
 				if (type[depth] == "{" && expect_key[depth]) {
 					key[depth] = s; expect_key[depth] = 0
-				} else emit(s)
+				} else { has[depth] = 1; emit(s) }
 				continue
 			}
 			if (c ~ /[-0-9tfn]/) {
@@ -72,6 +76,7 @@ json_flatten() {
 					c = substr(buf, i, 1)
 					if (c ~ /[-+0-9.eEtrufalsn]/) { v = v c; i++ } else break
 				}
+				has[depth] = 1
 				emit(v)
 				continue
 			}

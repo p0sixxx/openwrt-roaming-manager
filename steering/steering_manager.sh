@@ -85,9 +85,14 @@ steer_plan() {
 	_be=$1
 	for _other in $STEER_BACKENDS; do
 		[ "$_other" = "$_be" ] && continue
-		if [ "$(caps_get "steer.$_other.running")" = 1 ] || svc_is_enabled "$(steer_service_name "$_other")"; then
-			ORM_STEER_DISABLE="${ORM_STEER_DISABLE:-} $_other"
+		# the native backend shares the roamctl service (boot check, neighbor
+		# maintenance); it is "active" only when native steering is enabled
+		if [ "$_other" = native ]; then
+			[ "$(orm_uci -q get roamctl.global.native_steering)" = 1 ] || continue
+		elif [ "$(caps_get "steer.$_other.running")" != 1 ] && ! svc_is_enabled "$_other"; then
+			continue
 		fi
+		list_contains "${ORM_STEER_DISABLE:-}" "$_other" || ORM_STEER_DISABLE="${ORM_STEER_DISABLE:-} $_other"
 	done
 	plan_set roamctl.global.steering_backend_active "$_be"
 	[ "$_be" = none ] && return 0
@@ -120,6 +125,13 @@ steer_post_apply() {
 	_svc=$(steer_service_name "$_be")
 	if svc_is_enabled "$_svc"; then journal_add_svc "$_svc" 1; else journal_add_svc "$_svc" 0; fi
 	steer_call "$_be" post_apply
+}
+
+# Is the selected backend in the state the configuration expects?
+steer_backend_healthy() {
+	[ "$1" = none ] && return 0
+	[ "$(roam_get global.steering_backend_active none)" = "$1" ] || return 1
+	steer_call "$1" running
 }
 
 steer_status_line() {

@@ -9,9 +9,20 @@ caps_file() {
 	printf '%s/caps' "$ORM_STATE"
 }
 
+# Re-detection keeps run-scoped facts (run.* - e.g. the backup taken by
+# this invocation) and drops everything else.
 caps_reset() {
+	local _cf _keep
 	ensure_dir "$ORM_STATE" 0755
-	: >"$(caps_file)"
+	_cf=$(caps_file)
+	_keep=''
+	[ "${ORM_CAPS_INIT:-0}" = 1 ] && _keep=$(grep '^run\.' "$_cf" 2>/dev/null)
+	ORM_CAPS_INIT=1
+	if [ -n "$_keep" ]; then
+		printf '%s\n' "$_keep" >"$_cf"
+	else
+		: >"$_cf"
+	fi
 }
 
 caps_set() {

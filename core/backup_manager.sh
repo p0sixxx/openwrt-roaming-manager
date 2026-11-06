@@ -138,8 +138,9 @@ backup_restore() {
 		log_error "Cannot extract backup $_id"
 		return 1
 	fi
-	# Discard uncommitted UCI changes so they are not applied on top
-	for _c in $(cd "$_tmp/etc/config" && ls -1); do
+	# Discard uncommitted UCI changes of every config (also of configs
+	# created after the backup, e.g. by a freshly installed package)
+	for _c in $( (ls -1 "$_tmp/etc/config"; ls -1 "$ORM_UCI_CONFDIR") 2>/dev/null | sort -u); do
 		orm_uci revert "$_c" 2>/dev/null
 	done
 	(cd "$_tmp" && find etc -type f) | while IFS= read -r _f; do

@@ -111,7 +111,7 @@ _plan_add() {
 plan_set() {
 	local _cur
 	# plan_set PATH VALUE - skipped if the value is already set
-	_cur=$(orm_uci -q get "$1") && [ "$_cur" = "$2" ] && ! uci_is_list "$1" && return 0
+	_cur=$(orm_uci -q get "$1") && [ "$_cur" = "$2" ] && return 0
 	_plan_add "set${ORM_FS}$1${ORM_FS}$2"
 }
 
@@ -127,7 +127,9 @@ plan_list() {
 	shift
 	_pl_new=$(for _v in "$@"; do printf '%s\n' "$_v"; done)
 	_pl_cur=$(uci_get_list "$_pl_path")
-	[ "$_pl_new" = "$_pl_cur" ] && uci_is_list "$_pl_path" && return 0
+	# equal values: nothing to do (a one element list and an option with the
+	# same value cannot be told apart through uci and are equivalent here)
+	[ "$_pl_new" = "$_pl_cur" ] && return 0
 	_pl_rec="list${ORM_FS}${_pl_path}"
 	for _v in "$@"; do
 		_pl_rec="${_pl_rec}${ORM_FS}${_v}"
@@ -296,6 +298,7 @@ cfg_conflicts() {
 # ------------------------------------------------- roamctl own config
 roam_cfg_init() {
 	local _rc
+	[ "$ORM_DRYRUN" = 1 ] && return 0
 	_rc=$ORM_UCI_CONFDIR/roamctl
 	if [ ! -f "$_rc" ]; then
 		ensure_dir "$ORM_UCI_CONFDIR"

@@ -25,9 +25,9 @@ diag_clients() {
 		done
 	done
 	if [ "$_tot" -eq 0 ]; then
-		report_add live "client survey" "NOT TESTED" "no clients associated to roaming SSIDs"
+		report_add clients "client survey" "NOT TESTED" "no clients associated to roaming SSIDs"
 	else
-		report_add live "client survey" PASS "$_tot client(s): $_btm support 802.11v BTM, $_nr support 802.11k neighbor reports"
+		report_add clients "client survey" PASS "$_tot client(s): $_btm support 802.11v BTM, $_nr support 802.11k neighbor reports"
 	fi
 }
 
@@ -88,12 +88,17 @@ live_ft_status() {
 		printf 'unknown (no log)'
 		return
 	fi
-	if grep -qi "$2.*FT" "$1" || grep -qi 'authentication OK (FT)' "$1"; then
+	# hostapd logs "pairwise key handshake completed" (info level) for
+	# every full 4-way handshake. A reassociation without it means the
+	# keys came from the FT exchange.
+	if grep -qi "$2.*authentication OK (FT)" "$1" || grep -qi "$2.*FT authentication" "$1"; then
 		printf 'FT authentication logged'
 	elif grep -qi "$2.*pairwise key handshake completed" "$1"; then
 		printf 'full 4-way handshake observed (FT not used by client)'
+	elif grep -qi "$2.*associated" "$1"; then
+		printf 'FT used: reassociation without 4-way handshake'
 	else
-		printf 'no full handshake logged (FT likely)'
+		printf 'unknown (no association logged)'
 	fi
 }
 
@@ -172,7 +177,11 @@ diag_live() {
 		report_add live "transition" PASS "$_from -> $_to, signal ${_s1} -> ${_s2} dBm, association gap <= ${_gap}s (1s sampling)"
 	done <"$_w/transitions"
 	_ft=$(live_ft_status "$_w/log" "$_mac")
-	report_add live "FT status" "$(case "$_ft" in *'not used'*) echo WARN ;; unknown*) echo "NOT TESTED" ;; *) echo PASS ;; esac)" "$_ft"
+	if [ "$(roam_get "$(roam_groups | head -n1).ieee80211r" 0)" != 1 ]; then
+		report_add live "FT status" "NOT SUPPORTED" "802.11r not enabled"
+	else
+		report_add live "FT status" "$(case "$_ft" in *'not used'*) echo WARN ;; unknown*) echo "NOT TESTED" ;; *) echo PASS ;; esac)" "$_ft"
+	fi
 	if [ -n "$_outage" ]; then
 		if [ "$_outage" -le 1000 ]; then
 			report_add live "data path" PASS "packet loss ${_loss:-?}%, longest interruption ~${_outage} ms (ping every ${_pint}s)"

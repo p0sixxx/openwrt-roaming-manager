@@ -14,7 +14,7 @@ diag_config() {
 	fi
 	_groups=$(roam_groups)
 	if [ -z "$_groups" ]; then
-		report_add config "roaming groups" FAIL "no roaming group configured (run 'roamctl setup')"
+		report_add config "roaming groups" WARN "roaming is not configured yet (run 'roamctl setup')"
 		return 1
 	fi
 	for _g in $_groups; do

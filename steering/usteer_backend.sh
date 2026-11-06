@@ -93,14 +93,9 @@ usteer_be_configure() {
 
 	# Network used for inter-AP communication: the network of the first
 	# managed interface (usually "lan").
-	_net=''
-	_ssids=''
-	for _g in $(roam_groups); do
-		_ssids="$_ssids$(roam_get "$_g.ssid")$ORM_FS"
-		for _s in $(roam_get "$_g.iface"); do
-			[ -n "$_net" ] || _net=$(caps_get "iface.$_s.network" | cut -d' ' -f1)
-		done
-	done
+	_net=$(caps_get "iface.$(orch_managed_ifaces | head -n1).network" lan)
+	_net=${_net%% *}
+	_ssids=$(orch_managed_ssids | while IFS= read -r _x; do [ -n "$_x" ] && printf '%s%s' "$_x" "$ORM_FS"; done)
 	_set network "${_net:-lan}"
 	_aps=$(caps_get opt.aps 1)
 	if [ "$_aps" -le 1 ]; then _set local_mode 1; else _set local_mode 0; fi

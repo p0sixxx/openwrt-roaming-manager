@@ -95,8 +95,7 @@ dawn_be_configure() {
 		fi
 	fi
 	# broadcast address of the LAN bridge
-	_g1=$(roam_groups | head -n1)
-	_s1=$(roam_get "$_g1.iface" | cut -d' ' -f1)
+	_s1=$(orch_managed_ifaces | head -n1)
 	_net=$(caps_get "iface.$_s1.network" lan)
 	_bc=$(ip -4 addr show dev "br-${_net%% *}" 2>/dev/null | sed -n 's/.* brd \([0-9.]*\).*/\1/p' | head -n1)
 	[ -n "$_bc" ] && [ -n "$(dawn_find_opt broadcast_ip)" ] && _setp broadcast_ip "$_bc"

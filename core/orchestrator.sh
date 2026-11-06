@@ -21,6 +21,32 @@ orch_group_ifaces() {
 	printf '%s\n' "${ORCH_DETECTED_GROUPS:-}" | awk -F "$ORM_FS" -v g="$1" '$1 == g { print $3; exit }'
 }
 
+# Managed SSIDs / interfaces: the pending plan while a change is being
+# prepared (groups are not committed yet), the stored config otherwise.
+orch_managed_ssids() {
+	local _pf _g _ssid _r
+	_pf=$(groups_pending_file)
+	if [ -s "$_pf" ] && [ -n "${ORCH_DETECTED_GROUPS:-}" ]; then
+		while IFS="$ORM_FS" read -r _g _ssid _r; do
+			[ -n "$(orch_group_ifaces "$_g")" ] && printf '%s\n' "$_ssid"
+		done <"$_pf"
+	else
+		for _g in $(roam_groups); do roam_get "$_g.ssid"; echo; done
+	fi
+}
+
+orch_managed_ifaces() {
+	local _pf _g _r
+	_pf=$(groups_pending_file)
+	if [ -s "$_pf" ] && [ -n "${ORCH_DETECTED_GROUPS:-}" ]; then
+		while IFS="$ORM_FS" read -r _g _r; do
+			orch_group_ifaces "$_g" | tr ' ' '\n'
+		done <"$_pf"
+	else
+		for _g in $(roam_groups); do roam_get "$_g.iface" | tr ' ' '\n'; done
+	fi
+}
+
 orch_detect_groups() {
 	ORCH_DETECTED_GROUPS=$(cfg_detect_groups)
 }
@@ -64,6 +90,17 @@ orch_pending_local() {
 	done
 }
 
+# Pending records from the stored configuration (repair / sync)
+orch_pending_from_config() {
+	local _pf _g
+	orch_detect_groups
+	_pf=$(groups_pending_file)
+	: >"$_pf"
+	for _g in $(roam_groups); do
+		printf '%s\n' "$_g$ORM_FS$(roam_get "$_g.ssid")$ORM_FS$(roam_get "$_g.mdid")${ORM_FS}existing$ORM_FS$(roam_get "$_g.ft_key_mode" local)$ORM_FS$(roam_get "$_g.ieee80211k" 0)$ORM_FS$(roam_get "$_g.ieee80211v" 0)$ORM_FS$(roam_get "$_g.ieee80211r" 0)$ORM_FS$(roam_get "$_g.ft_mode" air)" >>"$_pf"
+	done
+}
+
 # Turn pending groups into a UCI plan (roamctl + wireless).
 orch_plan_groups() {
 	local _pf _g _ssid _md _origin _km _k _v _r _fm _ifs _p _s
@@ -76,6 +113,10 @@ orch_plan_groups() {
 		_ifs=$(orch_group_ifaces "$_g")
 		if [ -z "$_ifs" ]; then
 			log_warn "No eligible interface for SSID '$_ssid' on this AP - group skipped"
+			continue
+		fi
+		if [ "$_k$_v$_r" = 000 ]; then
+			log_warn "SSID '$_ssid': none of 802.11k/v/r is supported on its interfaces - not managed"
 			continue
 		fi
 		ORCH_GROUP_COUNT=$((ORCH_GROUP_COUNT + 1))
@@ -210,7 +251,6 @@ orch_global_plan() {
 	plan_set roamctl.global.profile "$(caps_get opt.profile balanced)"
 	plan_set roamctl.global.steering_backend "${ORM_BACKEND_REQ:-auto}"
 	[ -n "${ORM_NR_MODE:-}" ] && plan_set roamctl.global.nr_mode "$ORM_NR_MODE"
-	plan_set roamctl.global.configured "$(now)"
 	opt_plan_persist
 }
 
@@ -245,10 +285,24 @@ orch_apply() {
 		return 1
 	}
 	orch_packages_needed
+	# When the backend software is already present its configuration is
+	# part of the plan shown to the user (and of the idempotency check).
+	ORCH_STEER_PLANNED=0
+	# (usteer must be running to report its options; it is not started
+	# before the user confirmed, so then planning happens after confirm)
+	if [ -z "$ORCH_INSTALL" ] && { [ "$ORCH_BACKEND" != usteer ] || steer_call usteer running; }; then
+		steer_plan "$ORCH_BACKEND"
+		ORCH_STEER_PLANNED=1
+	fi
 	[ "${ORM_INTERACTIVE_SHOW:-1}" = 1 ] && orch_show_plan
 
 	if [ "$ORM_DRYRUN" = 1 ]; then
 		log_info "Dry run - nothing was changed."
+		return 0
+	fi
+	if [ "$(plan_count)" -eq 0 ] && [ -z "$ORCH_INSTALL" ] && [ -z "${ORM_STEER_DISABLE:-}" ] &&
+		steer_backend_healthy "$ORCH_BACKEND"; then
+		log_ok "Roaming configuration is already up to date - nothing to change"
 		return 0
 	fi
 	confirm "Apply this configuration?" || {
@@ -272,7 +326,7 @@ orch_apply() {
 		svc_set_enabled "$(steer_service_name "$_be")" 0
 	fi
 	steer_detect_backends
-	steer_plan "$ORCH_BACKEND"
+	[ "$ORCH_STEER_PLANNED" = 1 ] || steer_plan "$ORCH_BACKEND"
 
 	transaction_apply setup orch_post_commit
 	_rc=$?

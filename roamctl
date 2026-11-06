@@ -5,7 +5,7 @@
 # Seamless Wi-Fi roaming automation (802.11k/v/r, steering, multi-AP)
 #
 # Copyright (c) 2026 OpenWrt Roaming Manager contributors
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: MIT
 
 # ----------------------------------------------------------------- bootstrap
 _orm_self=$0
@@ -73,7 +73,7 @@ Configuration management:
                         802.11k neighbor report database
   steer [status|params|backend NAME|profile NAME|exclude MAC|include MAC|clear MAC]
   multiap [list|add NAME HOST [--user U] [--port P]|remove NAME|copy-id HOST
-           |discover|status|sync|check]
+           |install NAME|discover|status|sync [--nr-only]|check]
   rf [--apply]          advanced RF analysis (channels); changes need confirmation
   backend replace PKG   replace the hostapd/wpad package (asks for confirmation)
 
@@ -266,12 +266,13 @@ cmd_setup() {
 	orch_apply
 	_rc=$?
 	[ "$_rc" -eq 2 ] && return 0
+	[ "$ORM_DRYRUN" = 1 ] && return "$_rc"
 	detect_everything
 	run_diagnostics
 	orch_summary
 	[ "$ORM_VERBOSE" = 1 ] && report_print_details >&2
 	[ "$_rc" -eq 0 ] || return 1
-	report_has_fail && return 3
+	if report_has_fail; then return 3; fi
 	return 0
 }
 
@@ -315,7 +316,7 @@ cmd_audit() {
 	if [ -z "$(roam_groups)" ]; then
 		log_info "Roaming is not configured yet. 'roamctl setup' would apply the plan shown above."
 	fi
-	report_has_fail && return 3
+	if report_has_fail; then return 3; fi
 	return 0
 }
 
@@ -323,13 +324,7 @@ cmd_repair() {
 	local _pf _g _bad _l _rc
 	prepare
 	[ -n "$(roam_groups)" ] || die "Nothing to repair - run 'roamctl setup' first"
-	orch_detect_groups
-	# rebuild pending records from the stored configuration
-	_pf=$(groups_pending_file)
-	: >"$_pf"
-	for _g in $(roam_groups); do
-		printf '%s\n' "$_g$ORM_FS$(roam_get "$_g.ssid")$ORM_FS$(roam_get "$_g.mdid")${ORM_FS}existing$ORM_FS$(roam_get "$_g.ft_key_mode" local)$ORM_FS$(roam_get "$_g.ieee80211k" 0)$ORM_FS$(roam_get "$_g.ieee80211v" 0)$ORM_FS$(roam_get "$_g.ieee80211r" 0)$ORM_FS$(roam_get "$_g.ft_mode" air)" >>"$_pf"
-	done
+	orch_pending_from_config
 	_bad=$(mdid_conflicts)
 	[ -n "$_bad" ] && printf '%s\n' "$_bad" | while IFS= read -r _l; do log_warn "$_l"; done
 	ORM_BACKEND_REQ=${ORM_BACKEND_REQ:-$(roam_get global.steering_backend_active auto)}
@@ -340,7 +335,7 @@ cmd_repair() {
 	run_diagnostics
 	orch_summary
 	[ "$_rc" -eq 0 ] || return 1
-	report_has_fail && return 3
+	if report_has_fail; then return 3; fi
 	return 0
 }
 
@@ -353,7 +348,7 @@ cmd_diag() {
 		report_print_details >&2
 		orch_summary
 	fi
-	report_has_fail && return 3
+	if report_has_fail; then return 3; fi
 	return 0
 }
 
@@ -497,8 +492,13 @@ cmd_uninstall() {
 		return 1
 	fi
 	# packages installed by roamctl: offer removal (explicit confirmation)
-	grep "^pkg${ORM_FS}" "$(journal_file)" 2>/dev/null | cut -d"$ORM_FS" -f2 | while read -r _p; do
-		ORM_YES=0 pkg_remove "$_p" </dev/tty 2>/dev/null || log_info "Package $_p kept"
+	# shellcheck disable=SC2013 # package names contain no spaces
+	for _p in $(grep "^pkg${ORM_FS}" "$(journal_file)" 2>/dev/null | cut -d"$ORM_FS" -f2); do
+		if [ -t 0 ]; then
+			ORM_YES=0 pkg_remove "$_p" || log_info "Package $_p kept"
+		else
+			log_info "Package $_p installed by roamctl was kept (remove it manually if no longer needed)"
+		fi
 	done
 	rm -f "$ORM_UCI_CONFDIR/roamctl" "$(journal_file)" "$(nr_db)" "$(pending_file)"
 	rm -rf "$ORM_KEY_DIR" "$(ssh_dir)"
@@ -526,8 +526,10 @@ cmd_mdid() {
 		log_ok "Mobility Domain of $_g set to $_new - applying"
 		lock_release
 		trap - EXIT
-		ORM_ONLY_SSID=$(roam_get "$_g.ssid") cmd_repair
-		[ "$(roam_ap_count)" -gt 1 ] && log_warn "Run 'roamctl multiap sync' to push the new MDID to all member APs"
+		ORM_ONLY_SSID=$(roam_get "$_g.ssid") cmd_repair || return $?
+		if [ "$(roam_ap_count)" -gt 1 ]; then
+			log_warn "Run 'roamctl multiap sync' to push the new MDID to all member APs"
+		fi
 		;;
 	scan)
 		prepare nolock
@@ -625,8 +627,25 @@ cmd_multiap() {
 		;;
 	remove)
 		prepare
-		topo_ap_remove "$(arg 2)" && log_ok "Removed $(arg 2); its neighbor reports are withdrawn"
-		[ "$(nr_effective_mode)" = static ] && nr_apply_local
+		topo_ap_remove "$(arg 2)" || return 1
+		log_ok "Removed $(arg 2); its neighbor reports are withdrawn"
+		if [ "$(nr_effective_mode)" = static ]; then nr_apply_local; fi
+		;;
+	install)
+		# push this roamctl version to a member AP and install it there
+		prepare nolock
+		_ap=$(arg 2)
+		case "$_ap" in ap_*) ;; *) _ap="ap_$_ap" ;; esac
+		_h=$(orm_uci -q get "roamctl.$_ap.host") || die "Unknown AP '$(arg 2)' (roamctl multiap add first)"
+		log_info "Installing roamctl $ORM_VERSION on $_h"
+		# shellcheck disable=SC2016 # expanded on the member AP
+		if (cd "$ORM_ROOT" && tar -czf - core roaming steering multiap diagnostics config install files roamctl) |
+			ssh_exec "$_h" "$(orm_uci -q get "roamctl.$_ap.user" || echo root)" "$(orm_uci -q get "roamctl.$_ap.port" || echo 22)" \
+				'd=/tmp/roamctl-src; rm -rf "$d" && mkdir -p "$d" && tar -xzf - -C "$d" && sh "$d/install/install.sh" && rm -rf "$d"'; then
+			log_ok "roamctl installed on $_h"
+		else
+			die "Installation on $_h failed"
+		fi
 		;;
 	copy-id)
 		prepare nolock
@@ -650,7 +669,7 @@ cmd_multiap() {
 		report_reset
 		diag_multiap
 		report_print_details >&2
-		report_has_fail && return 3
+		if report_has_fail; then return 3; fi
 		;;
 	sync)
 		prepare
@@ -660,6 +679,14 @@ cmd_multiap() {
 		if [ "${ORM_NR_ONLY:-0}" != 1 ]; then
 			log_step "Staged synchronisation of $(roam_aps_enabled | grep -c .) member AP(s)"
 			confirm "Push roaming configuration (MDID, FT keys, steering) to member APs one by one?" || return 1
+			# the controller first: steering parameters depend on the AP count
+			log_step "Controller ($(caps_get board.model))"
+			orch_pending_from_config
+			ORM_BACKEND_REQ=${ORM_BACKEND_REQ:-$(roam_get global.steering_backend_active auto)}
+			ORM_INTERACTIVE_SHOW=0 ORM_YES=1 orch_apply || {
+				log_error "Controller update failed - member APs not touched"
+				return 1
+			}
 			sync_all
 		else
 			for _ap in $(roam_aps_enabled); do topo_probe_ap "$_ap" >/dev/null; done
@@ -667,7 +694,7 @@ cmd_multiap() {
 		log_step "Distributing neighbor reports"
 		sync_neighbors
 		report_print_details >&2
-		report_has_fail && return 3
+		if report_has_fail; then return 3; fi
 		;;
 	*) die "Unknown multiap action" ;;
 	esac
@@ -830,6 +857,7 @@ cmd_agent() {
 		[ -n "$SYNC_NRMODE" ] && ORM_NR_MODE=$SYNC_NRMODE
 		orm_uci set roamctl.global.mode=multiap
 		orm_uci set roamctl.global.role=member
+		orm_uci set "roamctl.global.ap_count=${SYNC_APCOUNT:-2}"
 		orm_uci commit roamctl
 		orch_detect_groups
 		if orch_apply >/dev/null 2>&1; then

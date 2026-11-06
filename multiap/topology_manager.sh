@@ -22,6 +22,13 @@ roam_aps_enabled() {
 
 # Number of APs in the roaming system (this AP + enabled members)
 roam_ap_count() {
+	local _n
+	# members learn the size of the roaming system from the controller
+	_n=$(orm_uci -q get roamctl.global.ap_count)
+	if [ "$(orm_uci -q get roamctl.global.role)" = member ] && is_uint "$_n"; then
+		echo "$_n"
+		return
+	fi
 	echo $(($(roam_aps_enabled | grep -c .) + 1))
 }
 
