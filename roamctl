@@ -1,0 +1,993 @@
+#!/bin/sh
+# shellcheck shell=sh
+#
+# roamctl - OpenWrt Roaming Manager
+# Seamless Wi-Fi roaming automation (802.11k/v/r, steering, multi-AP)
+#
+# Copyright (c) 2026 OpenWrt Roaming Manager contributors
+# SPDX-License-Identifier: GPL-2.0-only
+
+# ----------------------------------------------------------------- bootstrap
+_orm_self=$0
+case "$_orm_self" in
+/*) ;;
+*) _orm_self=$(command -v "$_orm_self" 2>/dev/null || printf '%s/%s' "$(pwd)" "$_orm_self") ;;
+esac
+_orm_real=$(readlink -f "$_orm_self" 2>/dev/null || printf '%s' "$_orm_self")
+if [ -z "${ORM_ROOT:-}" ]; then
+	_orm_dir=$(dirname "$_orm_real")
+	if [ -f "$_orm_dir/core/common.sh" ]; then
+		ORM_ROOT=$_orm_dir
+	else
+		ORM_ROOT=/usr/lib/roamctl
+	fi
+fi
+ORM_SELF=${ORM_SELF:-$_orm_real}
+export ORM_ROOT ORM_SELF
+
+for _m in core/common.sh core/logger.sh core/json.sh core/report.sh core/system_detect.sh \
+	core/hardware_detect.sh core/wireless_detect.sh core/package_manager.sh core/compatibility.sh \
+	core/config_engine.sh core/backup_manager.sh core/rollback_manager.sh \
+	roaming/mobility_domain.sh roaming/ieee80211k.sh roaming/ieee80211v.sh roaming/ieee80211r.sh \
+	roaming/neighbor_report.sh roaming/roaming_validator.sh \
+	steering/backend_interface.sh steering/steering_optimizer.sh steering/policy.sh \
+	steering/usteer_backend.sh steering/dawn_backend.sh steering/native_backend.sh \
+	steering/band_steering.sh steering/steering_manager.sh \
+	multiap/key_manager.sh multiap/ssh_manager.sh multiap/topology_manager.sh \
+	multiap/ap_discovery.sh multiap/ap_sync.sh \
+	diagnostics/hardware_test.sh diagnostics/package_test.sh diagnostics/config_test.sh \
+	diagnostics/hostapd_test.sh diagnostics/roaming_test.sh diagnostics/steering_test.sh \
+	diagnostics/connectivity_test.sh core/orchestrator.sh; do
+	if [ ! -f "$ORM_ROOT/$_m" ]; then
+		echo "roamctl: missing module $ORM_ROOT/$_m - broken installation" >&2
+		exit 1
+	fi
+	# shellcheck disable=SC1090
+	. "$ORM_ROOT/$_m"
+done
+
+# ------------------------------------------------------------------- usage
+usage() {
+	cat <<EOF
+OpenWrt Roaming Manager $ORM_VERSION - seamless Wi-Fi roaming for OpenWrt
+
+Usage: roamctl [options] [command] [arguments]
+
+Main commands:
+  setup                 analyse, show plan, confirm and configure roaming
+  advanced              like setup, asking for every option
+  audit                 analyse and test only, never changes anything
+  repair                re-apply the stored roaming configuration (fix drift)
+  diag                  run all diagnostics
+  test live --client MAC [--duration S] [--ip IP] [--steer]
+                        live roaming test with a real client
+  status                short status overview
+  detect [--raw]        show detected hardware and capabilities
+
+Configuration management:
+  backup [create|list|verify ID|restore ID|delete ID]
+  rollback [ID]         restore the latest (or given) backup
+  uninstall             revert all changes made by roamctl
+  mdid [show|set GROUP HEX|random GROUP|scan]
+  nr [show|collect|apply]
+                        802.11k neighbor report database
+  steer [status|params|backend NAME|profile NAME|exclude MAC|include MAC|clear MAC]
+  multiap [list|add NAME HOST [--user U] [--port P]|remove NAME|copy-id HOST
+           |discover|status|sync|check]
+  rf [--apply]          advanced RF analysis (channels); changes need confirmation
+  backend replace PKG   replace the hostapd/wpad package (asks for confirmation)
+
+Options:
+  -y, --yes             assume "yes" for confirmations (non-interactive)
+  -n, --dry-run         show what would change, change nothing
+  -v, --verbose         debug output
+  -q, --quiet           only warnings and errors
+      --audit           same as the "audit" command
+      --repair          same as the "repair" command
+      --rollback        same as the "rollback" command
+      --profile NAME    conservative | balanced | aggressive | iot-safe
+      --backend NAME    auto | usteer | dawn | native | none
+      --ssid SSID       configure only this SSID
+      --include SECTION manage a guest/IoT/open interface explicitly
+      --exclude SECTION never touch this interface
+      --no-11k | --no-11v | --no-11r
+      --ft-over-ds      use FT over the DS instead of over the air
+      --ft-key-mode M   auto | local | shared
+      --no-color        disable colours
+  -V, --version         print version
+  -h, --help            this help
+
+Seamless roaming also depends on the client devices: roamctl configures
+the access points; the decision to roam is always made by the client.
+EOF
+}
+
+# ----------------------------------------------------------- arg parsing
+ORM_CMD=''
+ORM_ARGS=''
+ORM_INCLUDE=''
+ORM_EXCLUDE=''
+
+parse_args() {
+	while [ $# -gt 0 ]; do
+		case "$1" in
+		-h | --help) usage; exit 0 ;;
+		-V | --version) echo "roamctl $ORM_VERSION"; exit 0 ;;
+		-v | --verbose) ORM_VERBOSE=1 ;;
+		-q | --quiet) ORM_QUIET=1 ;;
+		-y | --yes) ORM_YES=1 ;;
+		-n | --dry-run) ORM_DRYRUN=1 ;;
+		--no-color) ORM_COLOR=never; log_init_colors ;;
+		--color) ORM_COLOR=always; log_init_colors ;;
+		--audit) ORM_CMD=audit ;;
+		--repair) ORM_CMD=repair ;;
+		--rollback) ORM_CMD=rollback ;;
+		--profile) ORM_PROFILE=${2:-}; shift ;;
+		--backend) ORM_BACKEND_REQ=${2:-}; shift ;;
+		--ssid) ORM_ONLY_SSID=${2:-}; shift ;;
+		--include) ORM_INCLUDE="$ORM_INCLUDE ${2:-}"; shift ;;
+		--exclude) ORM_EXCLUDE="$ORM_EXCLUDE ${2:-}"; shift ;;
+		--no-11k) ORM_ENABLE_11K=0 ;;
+		--no-11v) ORM_ENABLE_11V=0 ;;
+		--no-11r) ORM_ENABLE_11R=0 ;;
+		--ft-over-ds) ORM_FT_MODE=ds ;;
+		--ft-key-mode) ORM_FT_KEY_MODE=${2:-auto}; shift ;;
+		--nr-mode) ORM_NR_MODE=${2:-auto}; shift ;;
+		--client) ORM_LIVE_CLIENT=${2:-}; shift ;;
+		--duration) ORM_LIVE_DURATION=${2:-60}; shift ;;
+		--ip) ORM_LIVE_IP=${2:-}; shift ;;
+		--steer) ORM_LIVE_STEER=1 ;;
+		--user) ORM_OPT_USER=${2:-}; shift ;;
+		--port) ORM_OPT_PORT=${2:-}; shift ;;
+		--raw) ORM_RAW=1 ;;
+		--apply) ORM_APPLY=1 ;;
+		--nr-only) ORM_NR_ONLY=1 ;;
+		--) shift; break ;;
+		-*) die "Unknown option '$1' (see roamctl --help)" ;;
+		*)
+			if [ -z "$ORM_CMD" ]; then
+				ORM_CMD=$1
+			else
+				ORM_ARGS="$ORM_ARGS$1$ORM_FS"
+			fi
+			;;
+		esac
+		shift
+	done
+	while [ $# -gt 0 ]; do
+		ORM_ARGS="$ORM_ARGS$1$ORM_FS"
+		shift
+	done
+	validate_options
+}
+
+validate_options() {
+	local _s
+	case "${ORM_PROFILE:-balanced}" in
+	conservative | balanced | aggressive | iot-safe) ;;
+	*) die "Invalid profile '$ORM_PROFILE'" ;;
+	esac
+	case "${ORM_BACKEND_REQ:-auto}" in
+	auto | usteer | dawn | native | none) ;;
+	*) die "Invalid backend '$ORM_BACKEND_REQ'" ;;
+	esac
+	case "${ORM_FT_KEY_MODE:-auto}" in
+	auto | local | shared) ;;
+	*) die "Invalid FT key mode '$ORM_FT_KEY_MODE'" ;;
+	esac
+	case "${ORM_NR_MODE:-auto}" in
+	auto | static | backend | off) ;;
+	*) die "Invalid neighbor report mode '$ORM_NR_MODE'" ;;
+	esac
+	for _s in $ORM_INCLUDE $ORM_EXCLUDE; do
+		printf '%s' "$_s" | grep -Eq '^[A-Za-z0-9_]+$' || die "Invalid section name '$_s'"
+	done
+}
+
+# arg N -> Nth positional argument after the command
+arg() {
+	printf '%s' "$ORM_ARGS" | awk -v RS="$ORM_FS" -v n="$1" 'NR == n { printf "%s", $0; exit }'
+}
+
+# ----------------------------------------------------------------- commands
+prepare() {
+	# prepare [nolock]
+	ensure_dir "$ORM_STATE" 0755 || die "Cannot create $ORM_STATE"
+	if [ "${1:-}" != nolock ]; then
+		lock_acquire || exit 1
+		trap 'lock_release' EXIT
+		trap 'lock_release; exit 130' INT TERM
+	fi
+	roam_cfg_init 2>/dev/null || true
+	detect_everything
+}
+
+run_diagnostics() {
+	report_reset
+	diag_hardware
+	diag_packages
+	diag_config
+	diag_hostapd
+	diag_steering
+	diag_connectivity
+	if [ "$(roam_ap_count)" -gt 1 ]; then
+		diag_multiap
+	fi
+	diag_clients
+	diag_live
+}
+
+diag_multiap() {
+	local _ap _c _rc _bad _g _rmd
+	for _ap in $(roam_aps_enabled); do
+		if ! topo_probe_ap "$_ap"; then
+			report_add multiap "$_ap" FAIL "unreachable over SSH"
+			continue
+		fi
+		_c=$(topo_check_ap "$_ap")
+		_rc=$?
+		_bad=0
+		for _g in $(roam_groups); do
+			_rmd=$(caps_get "remote.$_ap.group.$_g.mdid")
+			[ -z "$(caps_get "remote.$_ap.group.$_g.security")" ] && continue
+			[ "$_rmd" != "$(roam_get "$_g.mdid")" ] && _bad=1
+			if [ "$(roam_get "$_g.ft_key_mode")" = shared ] &&
+				[ "$(caps_get "remote.$_ap.group.$_g.ftkeyfp")" != "$(ft_key_fingerprint "$_g")" ]; then
+				_bad=1
+			fi
+		done
+		if [ "$_rc" -ne 0 ]; then
+			report_add multiap "$_ap" FAIL "$(printf '%s' "$_c" | tr '\n' ';')"
+		elif [ "$_bad" = 1 ]; then
+			report_add multiap "$_ap" FAIL "MDID or FT key differs from the group (run 'roamctl multiap sync')"
+		else
+			report_add multiap "$_ap" PASS "reachable, OpenWrt $(caps_get "remote.$_ap.os_version"), MDID and FT keys consistent"
+		fi
+	done
+}
+
+cmd_setup() {
+	local _rc
+	prepare
+	orch_show_header
+	orch_show_ifaces
+	if [ "$(caps_get os.support)" = unsupported ]; then
+		die "OpenWrt $(caps_get os.version) is not supported (22.03+ required, 24.10/25.x tested)"
+	fi
+	if [ "$(caps_get hostapd.binary)" = none ]; then
+		die "No hostapd/wpad installed - wireless access point support is missing"
+	fi
+	orch_detect_groups
+	if [ -z "$ORCH_DETECTED_GROUPS" ]; then
+		cfg_conflicts | sed 's/^/  ! /' >&2
+		die "No interface eligible for roaming (needs an enabled WPA2/WPA3 access point that is not guest/IoT)"
+	fi
+	orch_pending_local
+	orch_apply
+	_rc=$?
+	[ "$_rc" -eq 2 ] && return 0
+	detect_everything
+	run_diagnostics
+	orch_summary
+	[ "$ORM_VERBOSE" = 1 ] && report_print_details >&2
+	[ "$_rc" -eq 0 ] || return 1
+	report_has_fail && return 3
+	return 0
+}
+
+cmd_advanced() {
+	local _a _p _dl _inc
+	[ -t 0 ] || [ -n "${ORM_FORCE_INTERACTIVE:-}" ] || die "advanced mode is interactive (use options with 'setup' instead)"
+	ask() {
+		# ask "question" default -> answer
+		printf '%s [%s]: ' "$1" "$2" >&2
+		read -r _a || _a=''
+		printf '%s' "${_a:-$2}"
+	}
+	_p=$(ask "Profile (conservative/balanced/aggressive/iot-safe)" "${ORM_PROFILE:-balanced}")
+	ORM_PROFILE=$_p
+	ORM_BACKEND_REQ=$(ask "Steering backend (auto/usteer/dawn/native/none)" "${ORM_BACKEND_REQ:-auto}")
+	[ "$(ask "Enable 802.11k (y/n)" y)" = n ] && ORM_ENABLE_11K=0
+	[ "$(ask "Enable 802.11v (y/n)" y)" = n ] && ORM_ENABLE_11V=0
+	[ "$(ask "Enable 802.11r (y/n)" y)" = n ] && ORM_ENABLE_11R=0
+	[ "$(ask "FT mode (air/ds)" air)" = ds ] && ORM_FT_MODE=ds
+	ORM_FT_KEY_MODE=$(ask "FT key distribution (auto/local/shared)" auto)
+	_dl=$(ask "Reassociation deadline in TU (empty = default)" "")
+	[ -n "$_dl" ] && is_uint "$_dl" && ORM_REASSOC_DEADLINE=$_dl
+	_inc=$(ask "Additional interfaces to include (guest/IoT sections, space separated)" "")
+	ORM_INCLUDE="$ORM_INCLUDE $_inc"
+	validate_options
+	cmd_setup
+}
+
+cmd_audit() {
+	ORM_DRYRUN=1
+	prepare nolock
+	orch_show_header
+	orch_show_ifaces
+	orch_detect_groups
+	if [ -n "$ORCH_DETECTED_GROUPS" ]; then
+		orch_pending_local
+		ORM_YES=1 orch_apply >/dev/null
+	fi
+	run_diagnostics
+	report_print_details >&2
+	if [ -z "$(roam_groups)" ]; then
+		log_info "Roaming is not configured yet. 'roamctl setup' would apply the plan shown above."
+	fi
+	report_has_fail && return 3
+	return 0
+}
+
+cmd_repair() {
+	local _pf _g _bad _l _rc
+	prepare
+	[ -n "$(roam_groups)" ] || die "Nothing to repair - run 'roamctl setup' first"
+	orch_detect_groups
+	# rebuild pending records from the stored configuration
+	_pf=$(groups_pending_file)
+	: >"$_pf"
+	for _g in $(roam_groups); do
+		printf '%s\n' "$_g$ORM_FS$(roam_get "$_g.ssid")$ORM_FS$(roam_get "$_g.mdid")${ORM_FS}existing$ORM_FS$(roam_get "$_g.ft_key_mode" local)$ORM_FS$(roam_get "$_g.ieee80211k" 0)$ORM_FS$(roam_get "$_g.ieee80211v" 0)$ORM_FS$(roam_get "$_g.ieee80211r" 0)$ORM_FS$(roam_get "$_g.ft_mode" air)" >>"$_pf"
+	done
+	_bad=$(mdid_conflicts)
+	[ -n "$_bad" ] && printf '%s\n' "$_bad" | while IFS= read -r _l; do log_warn "$_l"; done
+	ORM_BACKEND_REQ=${ORM_BACKEND_REQ:-$(roam_get global.steering_backend_active auto)}
+	orch_apply
+	_rc=$?
+	[ "$_rc" -eq 2 ] && return 0
+	detect_everything
+	run_diagnostics
+	orch_summary
+	[ "$_rc" -eq 0 ] || return 1
+	report_has_fail && return 3
+	return 0
+}
+
+cmd_diag() {
+	prepare nolock
+	run_diagnostics
+	if [ "${ORM_RAW:-0}" = 1 ]; then
+		report_print_raw
+	else
+		report_print_details >&2
+		orch_summary
+	fi
+	report_has_fail && return 3
+	return 0
+}
+
+cmd_test() {
+	case "$(arg 1)" in
+	live)
+		prepare nolock
+		report_reset
+		[ -n "${ORM_LIVE_CLIENT:-}" ] || die "Usage: roamctl test live --client <mac> [--duration 60] [--ip <ip>] [--steer]"
+		diag_live
+		report_print_details >&2
+		if [ "$(report_category_status live)" != PASS ]; then
+			printf 'CONFIGURATION VERIFIED — LIVE ROAMING NOT TESTED\n' >&2
+		fi
+		;;
+	'' | all) cmd_diag ;;
+	*) die "Unknown test '$(arg 1)'" ;;
+	esac
+}
+
+cmd_status() {
+	local _any _g _ap _lb
+	prepare nolock
+	{
+		printf 'roamctl %s on %s (OpenWrt %s)\n' "$ORM_VERSION" "$(caps_get board.model)" "$(caps_get os.version)"
+		printf 'Mode: %s, profile: %s, steering: %s (%s)\n' "$(roam_get global.mode standalone)" \
+			"$(roam_get global.profile balanced)" "$(roam_get global.steering_backend_active none)" "$(steer_status_line)"
+		_any=0
+		for _g in $(roam_groups); do
+			_any=1
+			printf "Group '%s': MDID %s, 11k=%s 11v=%s 11r=%s (FT %s, keys %s), interfaces: %s\n" \
+				"$(roam_get "$_g.ssid")" "$(roam_get "$_g.mdid")" "$(roam_get "$_g.ieee80211k")" \
+				"$(roam_get "$_g.ieee80211v")" "$(roam_get "$_g.ieee80211r")" "$(roam_get "$_g.ft_mode" air)" \
+				"$(roam_get "$_g.ft_key_mode")" "$(roam_get "$_g.iface")"
+		done
+		[ "$_any" = 1 ] || printf 'Roaming not configured (run roamctl setup)\n'
+		for _ap in $(roam_aps); do
+			printf 'Member AP %s: %s (enabled=%s)\n' "$_ap" "$(orm_uci -q get "roamctl.$_ap.host")" "$(orm_uci -q get "roamctl.$_ap.enabled")"
+		done
+		rollback_is_pending && printf 'WARNING: an unconfirmed change is pending (watchdog active)\n'
+		_lb=$(backup_latest)
+		[ -n "$_lb" ] && printf 'Latest backup: %s\n' "$_lb"
+	} >&2
+}
+
+cmd_detect() {
+	local _s _f
+	prepare nolock
+	if [ "${ORM_RAW:-0}" = 1 ]; then
+		grep -v '^iface\..*\.keyfp=' "$(caps_file)"
+		return 0
+	fi
+	orch_show_header
+	orch_show_ifaces
+	{
+		printf 'Per-interface capabilities:\n'
+		for _s in $(caps_get iface.list); do
+			[ "$(caps_get "iface.$_s.eligible")" = 1 ] || continue
+			printf '  %s (%s):\n' "$_s" "$(caps_get "iface.$_s.ifname")"
+			for _f in 11k 11v 11r; do
+				if [ "$(caps_get "iface.$_s.can_$_f")" = 1 ]; then
+					printf '    802.%-4s yes %s\n' "$_f" "$([ "$_f" = 11r ] && caps_get "iface.$_s.ft_modes")"
+				else
+					printf '    802.%-4s no  (%s)\n' "$_f" "$(caps_get "iface.$_s.why_$_f")"
+				fi
+			done
+		done
+	} >&2
+}
+
+cmd_backup() {
+	local _b _id
+	case "$(arg 1)" in
+	'' | create)
+		prepare
+		backup_create manual >/dev/null || return 1
+		;;
+	list)
+		ensure_dir "$ORM_STATE"
+		for _b in $(backup_list); do
+			printf '%s  %s  %s  roamctl %s  OpenWrt %s\n' "$_b" "$(backup_meta "$_b" date)" \
+				"$(backup_meta "$_b" reason)" "$(backup_meta "$_b" roamctl)" "$(backup_meta "$_b" openwrt)"
+		done
+		;;
+	verify)
+		_id=$(arg 2)
+		[ -n "$_id" ] || _id=$(backup_latest)
+		backup_verify "$_id" && log_ok "Backup $_id is intact"
+		;;
+	restore)
+		_id=$(arg 2)
+		[ -n "$_id" ] || die "Usage: roamctl backup restore <id>"
+		prepare
+		confirm "Restore backup $_id and reload wireless?" || return 1
+		rollback_now "$_id" manual
+		;;
+	delete)
+		_id=$(arg 2)
+		printf '%s' "$_id" | grep -Eq '^[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$' || die "Invalid backup id"
+		confirm "Delete backup $_id?" || return 1
+		rm -f "$ORM_BACKUP_DIR/$_id".*
+		;;
+	*) die "Unknown backup action '$(arg 1)'" ;;
+	esac
+}
+
+cmd_rollback() {
+	local _id
+	prepare
+	_id=$(arg 1)
+	[ -n "$_id" ] || _id=$(backup_latest)
+	[ -n "$_id" ] || die "No backup available"
+	log_info "Rolling back to backup $_id ($(backup_meta "$_id" date), reason: $(backup_meta "$_id" reason))"
+	confirm "Restore this backup and reload wireless?" || return 1
+	rollback_now "$_id" manual
+}
+
+cmd_uninstall() {
+	local _bid _t _svc _was _f _l _p
+	prepare
+	log_step "Reverting all changes made by roamctl"
+	log_info "Original values of every option roamctl changed are restored from the journal;"
+	log_info "unrelated changes made later by you are kept."
+	confirm "Uninstall roaming configuration?" || return 1
+	_bid=$(backup_create pre-uninstall) || die "Backup failed"
+	health_baseline
+	journal_restore_uci
+	# services: back to their original enabled state
+	while IFS="$ORM_FS" read -r _t _svc _was; do
+		[ "$_t" = svc ] || continue
+		svc_set_enabled "$_svc" "$_was"
+	done <"$(journal_file)" 2>/dev/null
+	svc_set_enabled roamctl 0
+	wireless_reload
+	wireless_settle 0 || true
+	_f=$(health_check)
+	if [ -n "$_f" ]; then
+		printf '%s\n' "$_f" | while IFS= read -r _l; do log_error "$_l"; done
+		log_error "Wireless unhealthy after uninstall - restoring backup $_bid"
+		rollback_now "$_bid" uninstall
+		return 1
+	fi
+	# packages installed by roamctl: offer removal (explicit confirmation)
+	grep "^pkg${ORM_FS}" "$(journal_file)" 2>/dev/null | cut -d"$ORM_FS" -f2 | while read -r _p; do
+		ORM_YES=0 pkg_remove "$_p" </dev/tty 2>/dev/null || log_info "Package $_p kept"
+	done
+	rm -f "$ORM_UCI_CONFDIR/roamctl" "$(journal_file)" "$(nr_db)" "$(pending_file)"
+	rm -rf "$ORM_KEY_DIR" "$(ssh_dir)"
+	log_ok "Roaming configuration removed (backups kept in $ORM_BACKUP_DIR)"
+	log_info "Remove the program itself with: sh /usr/lib/roamctl/install/uninstall.sh"
+}
+
+cmd_mdid() {
+	local _g _v _new _done _s
+	case "$(arg 1)" in
+	'' | show)
+		prepare nolock
+		for _g in $(roam_groups); do
+			printf "%s '%s' %s (%s)\n" "$_g" "$(roam_get "$_g.ssid")" "$(roam_get "$_g.mdid")" "$(roam_get "$_g.mdid_origin" unknown)"
+		done
+		mdid_conflicts | sed 's/^/conflict: /'
+		;;
+	set | random)
+		prepare
+		_g=$(arg 2)
+		_v=$(arg 3)
+		[ "$(arg 1)" = random ] && _v=random
+		[ -n "$_g" ] && [ -n "$_v" ] || die "Usage: roamctl mdid set <group> <hex4> | roamctl mdid random <group>"
+		_new=$(mdid_change "$_g" "$_v") || return 1
+		log_ok "Mobility Domain of $_g set to $_new - applying"
+		lock_release
+		trap - EXIT
+		ORM_ONLY_SSID=$(roam_get "$_g.ssid") cmd_repair
+		[ "$(roam_ap_count)" -gt 1 ] && log_warn "Run 'roamctl multiap sync' to push the new MDID to all member APs"
+		;;
+	scan)
+		prepare nolock
+		_done=0
+		for _s in $(caps_get iface.list); do
+			[ "$(caps_get "iface.$_s.hostapd")" = 1 ] || continue
+			if mdid_scan "$(caps_get "iface.$_s.ifname")"; then _done=1; break; fi
+		done
+		if [ "$_done" = 1 ]; then
+			cat "$ORM_STATE/scan_mdids"
+			mdid_conflicts | sed 's/^/conflict: /'
+		else
+			log_warn "Over-the-air scan not supported on this driver/interface (NOT TESTED)"
+		fi
+		;;
+	*) die "Unknown mdid action" ;;
+	esac
+}
+
+cmd_nr() {
+	prepare nolock
+	case "$(arg 1)" in
+	'' | show) nr_show ;;
+	collect) log_info "Collected $(nr_collect_local local) entries" ;;
+	apply) nr_apply_local && log_ok "Neighbor lists installed" ;;
+	*) die "Unknown nr action" ;;
+	esac
+}
+
+cmd_steer() {
+	local _be
+	case "$(arg 1)" in
+	'' | status)
+		prepare nolock
+		printf 'Backend: %s (%s)\n' "$(roam_get global.steering_backend_active none)" "$(steer_status_line)" >&2
+		_be=$(roam_get global.steering_backend_active none)
+		[ "$_be" != none ] && printf 'Features: %s\n' "$(steer_call "$_be" features)" >&2
+		printf 'Excluded clients: %s\n' "$(orm_uci -q get roamctl.steering.exclude_client)" >&2
+		printf 'Included clients: %s\n' "$(orm_uci -q get roamctl.steering.include_client || echo '(all)')" >&2
+		;;
+	params)
+		prepare nolock
+		opt_compute "$(roam_get global.profile balanced)" "$(roam_ap_count)"
+		opt_show
+		;;
+	backend)
+		ORM_BACKEND_REQ=$(arg 2)
+		validate_options
+		cmd_repair
+		;;
+	profile)
+		ORM_PROFILE=$(arg 2)
+		validate_options
+		cmd_repair
+		;;
+	exclude)
+		band_client_add exclude_client "$(arg 2)" && log_ok "$(arg 2) will never be steered"
+		;;
+	include)
+		band_client_add include_client "$(arg 2)" && log_ok "$(arg 2) added to the steering include list"
+		;;
+	clear)
+		band_client_del exclude_client "$(arg 2)"
+		band_client_del include_client "$(arg 2)"
+		;;
+	*) die "Unknown steer action" ;;
+	esac
+}
+
+cmd_multiap() {
+	local _ap _n _h _sec _l
+	case "$(arg 1)" in
+	'' | list)
+		for _ap in $(roam_aps); do
+			printf '%s %s@%s:%s enabled=%s\n' "$_ap" "$(orm_uci -q get "roamctl.$_ap.user")" \
+				"$(orm_uci -q get "roamctl.$_ap.host")" "$(orm_uci -q get "roamctl.$_ap.port")" "$(orm_uci -q get "roamctl.$_ap.enabled")"
+		done
+		;;
+	add)
+		prepare
+		_n=$(arg 2) _h=$(arg 3)
+		[ -n "$_n" ] && [ -n "$_h" ] || die "Usage: roamctl multiap add <name> <host> [--user root] [--port 22]"
+		ssh_key_ensure >/dev/null || die "Cannot create SSH identity"
+		_sec=$(topo_ap_add "$_n" "$_h" "${ORM_OPT_USER:-root}" "${ORM_OPT_PORT:-22}") || return 1
+		if topo_probe_ap "$_sec"; then
+			log_ok "$_sec reachable: OpenWrt $(caps_get "remote.$_sec.os_version"), roamctl $(caps_get "remote.$_sec.roamctl")"
+			topo_check_ap "$_sec" | while IFS= read -r _l; do log_warn "$_l"; done
+			log_info "Run 'roamctl multiap sync' to configure it."
+		else
+			log_warn "$_h is not reachable with key authentication yet."
+			log_info "Install the key: roamctl multiap copy-id $_h   (or add this key to /etc/dropbear/authorized_keys there):"
+			ssh_pubkey >&2
+			log_info "roamctl must be installed on the member AP as well (see README)."
+		fi
+		;;
+	remove)
+		prepare
+		topo_ap_remove "$(arg 2)" && log_ok "Removed $(arg 2); its neighbor reports are withdrawn"
+		[ "$(nr_effective_mode)" = static ] && nr_apply_local
+		;;
+	copy-id)
+		prepare nolock
+		_h=$(arg 2)
+		[ -n "$_h" ] || die "Usage: roamctl multiap copy-id <host> [--user root] [--port 22]"
+		ssh_copy_id "$_h" "${ORM_OPT_USER:-root}" "${ORM_OPT_PORT:-22}"
+		;;
+	discover)
+		prepare nolock
+		log_step "BSSIDs broadcasting managed SSIDs"
+		if disc_scan; then
+			cat "$ORM_STATE/scan_bss"
+		else
+			log_warn "Scan not supported on this interface (NOT TESTED)"
+		fi
+		log_step "Possible OpenWrt APs on the LAN (SSH port open)"
+		disc_lan_candidates
+		;;
+	status | check)
+		prepare nolock
+		report_reset
+		diag_multiap
+		report_print_details >&2
+		report_has_fail && return 3
+		;;
+	sync)
+		prepare
+		[ -n "$(roam_groups)" ] || die "Configure this AP first: roamctl setup"
+		[ -n "$(roam_aps_enabled)" ] || die "No member APs (roamctl multiap add <name> <host>)"
+		report_reset
+		if [ "${ORM_NR_ONLY:-0}" != 1 ]; then
+			log_step "Staged synchronisation of $(roam_aps_enabled | grep -c .) member AP(s)"
+			confirm "Push roaming configuration (MDID, FT keys, steering) to member APs one by one?" || return 1
+			sync_all
+		else
+			for _ap in $(roam_aps_enabled); do topo_probe_ap "$_ap" >/dev/null; done
+		fi
+		log_step "Distributing neighbor reports"
+		sync_neighbors
+		report_print_details >&2
+		report_has_fail && return 3
+		;;
+	*) die "Unknown multiap action" ;;
+	esac
+}
+
+cmd_rf() {
+	local _tmp _s _band _b _ch _sig _ss _r _cur _best _bestv _c _v _n
+	prepare nolock
+	log_step "Advanced RF analysis (channels, overlap)"
+	log_info "Standard mode never changes channels, width, TX power or country."
+	_tmp="$ORM_STATE/rf.scan"
+	: >"$_tmp"
+	for _s in $(caps_get iface.list); do
+		[ "$(caps_get "iface.$_s.hostapd")" = 1 ] || continue
+		_band=$(caps_get "iface.$_s.band")
+		disc_scan_iface "$(caps_get "iface.$_s.ifname")" 2>/dev/null | while read -r _b _ch _sig _ss; do
+			printf '%s %s %s\n' "$_band" "$_ch" "$_sig" >>"$_tmp"
+		done
+	done
+	for _r in $(caps_get radio.list); do
+		_band=$(caps_get "radio.$_r.band")
+		_cur=$(caps_get "radio.$_r.cur_channel")
+		[ -n "$_cur" ] || _cur=$(caps_get "radio.$_r.channel")
+		printf '%s (%s): channel %s, width %s\n' "$_r" "$_band" "$_cur" "$(caps_get "radio.$_r.htmode")" >&2
+		if [ "$_band" = 2g ]; then
+			_best='' _bestv=999999
+			for _c in 1 6 11; do
+				# weighted occupancy: stronger neighbours count more
+				_v=$(awk -v c="$_c" '$1 == "2g" && $2 ~ /^[0-9]+$/ { d = $2 - c; if (d < 0) d = -d; if (d < 5) { s = $3 + 100; if (s < 0) s = 0; o += s } } END { print o + 0 }' "$_tmp")
+				printf '    channel %-3s occupancy %s\n' "$_c" "$_v" >&2
+				[ "$_v" -lt "$_bestv" ] && _bestv=$_v _best=$_c
+			done
+			if [ -n "$_best" ] && [ "$_best" != "$_cur" ]; then
+				printf '  suggestion: channel %s\n' "$_best" >&2
+				if [ "${ORM_APPLY:-0}" = 1 ]; then
+					log_warn "Changing the channel disconnects all clients of $_r briefly."
+					if confirm "Set $_r to channel $_best?"; then
+						plan_reset
+						plan_set "wireless.$_r.channel" "$_best"
+						lock_acquire || return 1
+						transaction_apply rf-channel
+						lock_release
+					fi
+				fi
+			else
+				printf '  current channel is already the least occupied of 1/6/11\n' >&2
+			fi
+		else
+			_n=$(awk -v b="$_band" -v c="$_cur" '$1 == b && $2 == c' "$_tmp" | wc -l)
+			printf '  %s other BSS on channel %s\n' "$_n" "$_cur" >&2
+		fi
+	done
+	log_info "Same channel on neighbouring APs of one roaming group increases co-channel interference;"
+	log_info "different channels per AP are recommended for 5/6 GHz."
+}
+
+cmd_backend() {
+	local _new _old _bid _f
+	[ "$(arg 1)" = replace ] || die "Usage: roamctl backend replace <wpad-package>"
+	_new=$(arg 2)
+	printf '%s' "$_new" | grep -Eq '^(wpad|hostapd)(-[a-z0-9]+)*$' || die "Invalid package name"
+	prepare
+	_old=$(caps_get hostapd.package)
+	[ "$_old" = "$_new" ] && { log_ok "$_new already installed"; return 0; }
+	health_baseline
+	_bid=$(backup_create backend-replace) || die "Backup failed"
+	pkg_replace_backend "$_old" "$_new" || return 1
+	wireless_reload
+	wireless_settle "$(kv_get "$ORM_STATE/baseline" bss 0)" || true
+	_f=$(health_check)
+	if [ -n "$_f" ]; then
+		log_error "Wireless unhealthy after backend replacement: $_f"
+		log_error "Restoring configuration; reinstall $_old manually if needed"
+		rollback_now "$_bid" backend-replace
+		return 1
+	fi
+	log_ok "Backend replaced; run 'roamctl setup' to enable newly available features"
+}
+
+# ----------------------------------------------------------- background
+cmd_daemon() {
+	local _iter _last_objs _objs _int
+	ensure_dir "$ORM_STATE"
+	echo "$$" >"$ORM_STATE/daemon.pid"
+	ORM_SYSLOG=1
+	ORM_QUIET=1
+	trap 'rm -f "$ORM_STATE/daemon.pid"; exit 0' INT TERM
+	_iter=0
+	_last_objs=''
+	detect_everything
+	while :; do
+		_objs=$(ubus list 'hostapd.*' 2>/dev/null | tr '\n' ' ')
+		if [ "$_objs" != "$_last_objs" ] || [ $((_iter % 40)) -eq 0 ]; then
+			[ "$_iter" -gt 0 ] && detect_everything
+			_last_objs=$_objs
+		fi
+		if [ "$(orm_uci -q get roamctl.global.native_steering)" = 1 ]; then
+			native_tick
+		fi
+		if [ $((_iter % 4)) -eq 0 ] && [ "$(nr_effective_mode)" = static ]; then
+			nr_maintain
+		fi
+		[ $((_iter % 240)) -eq 0 ] && pol_gc
+		_iter=$((_iter + 1))
+		_int=$(orm_uci -q get roamctl.steering.interval)
+		is_uint "$_int" && [ "$_int" -ge 5 ] || _int=15
+		sleep "$_int"
+	done
+}
+
+cmd_agent() {
+	local _verb _g _ssid _ifs _f _md _bands _bss _s _l _k _own _id _m _d
+	ORM_QUIET=1
+	_verb=$(arg 1)
+	case "$_verb" in
+	ping) echo pong ;;
+	version) echo "$ORM_VERSION" ;;
+	info)
+		prepare nolock
+		printf 'roamctl=%s\nos_version=%s\nos_support=%s\nmodel=%s\n' "$ORM_VERSION" \
+			"$(caps_get os.version)" "$(caps_get os.support)" "$(caps_get board.model)"
+		printf 'hostapd=%s\nbackend=%s\n' "$(caps_get hostapd.package)" "$(caps_get steer.active)"
+		orch_detect_groups
+		printf '%s\n' "$ORCH_DETECTED_GROUPS" | while IFS="$ORM_FS" read -r _g _ssid _ifs; do
+			[ -n "$_g" ] || continue
+			_f=${_ifs%% *}
+			_md=none
+			[ "$(caps_get "iface.$_f.uci_ieee80211r")" = 1 ] && _md=$(lower "$(caps_get "iface.$_f.uci_mobility_domain")")
+			_bands=''
+			_bss=''
+			for _s in $_ifs; do
+				_bands="$_bands $(caps_get "iface.$_s.band")"
+				_bss="$_bss $(caps_get "iface.$_s.bssid")"
+			done
+			printf 'group.%s.ssid=%s\n' "$_g" "$_ssid"
+			printf 'group.%s.security=%s\n' "$_g" "$(caps_get "iface.$_f.security")"
+			printf 'group.%s.keyfp=%s\n' "$_g" "$(caps_get "iface.$_f.keyfp")"
+			printf 'group.%s.mdid=%s\n' "$_g" "${_md:-none}"
+			printf 'group.%s.ftkeyfp=%s\n' "$_g" "$(ft_iface_key_fingerprint "$_f")"
+			printf 'group.%s.bands=%s\n' "$_g" "${_bands# }"
+			printf 'group.%s.bssids=%s\n' "$_g" "${_bss# }"
+			printf 'group.%s.can_11r=%s\n' "$_g" "$(caps_get "iface.$_f.can_11r")"
+		done
+		grep '^conflict\.local\.' "$(caps_file)" 2>/dev/null | while IFS= read -r _l; do
+			_k=${_l%%=*}
+			printf 'group.%s.security=conflict\n' "${_k#conflict.local.}"
+		done
+		;;
+	apply)
+		ORM_YES=1
+		ORM_INTERACTIVE_SHOW=0
+		prepare
+		if ! sync_payload_import; then
+			echo "result=fail"
+			echo "error=malformed or invalid sync payload"
+			return 1
+		fi
+		ORM_PROFILE=${SYNC_PROFILE:-balanced}
+		ORM_BACKEND_REQ=${SYNC_BACKEND:-auto}
+		[ -n "$SYNC_NRMODE" ] && ORM_NR_MODE=$SYNC_NRMODE
+		orm_uci set roamctl.global.mode=multiap
+		orm_uci set roamctl.global.role=member
+		orm_uci commit roamctl
+		orch_detect_groups
+		if orch_apply >/dev/null 2>&1; then
+			echo "result=ok"
+			echo "backup=$(caps_get run.backup)"
+		else
+			echo "result=fail"
+			if [ "$(caps_get run.rolled_back)" = 1 ]; then
+				echo "error=health check failed after apply; rolled back"
+			else
+				echo "error=$(tail -n 1 "$ORM_LOG" 2>/dev/null | sed 's/^.*\] //')"
+			fi
+			return 1
+		fi
+		;;
+	nr-own)
+		prepare nolock
+		nr_collect_local local >/dev/null
+		awk -F "$ORM_FS" '$2 == "local"' "$(nr_db)" 2>/dev/null
+		;;
+	nr-set)
+		prepare
+		_own=''
+		for _s in $(caps_get iface.list); do _own="$_own $(caps_get "iface.$_s.bssid")"; done
+		awk -F "$ORM_FS" -v OFS="$ORM_FS" -v own="$_own" '
+			BEGIN { n = split(own, a, " "); for (i = 1; i <= n; i++) mine[a[i]] = 1 }
+			{ if ($4 in mine) $2 = "local"; print }' | nr_db_import
+		if [ "$(nr_effective_mode)" = static ]; then
+			nr_apply_local >/dev/null 2>&1
+		fi
+		echo "result=ok"
+		;;
+	health)
+		prepare nolock
+		_f=$(health_check)
+		if [ -z "$_f" ]; then echo "result=ok"; else echo "result=fail"; printf '%s\n' "$_f"; fi
+		;;
+	backup)
+		prepare
+		backup_create remote
+		echo
+		;;
+	rollback)
+		prepare
+		_id=$(arg 2)
+		[ -n "$_id" ] || _id=$(backup_latest)
+		if rollback_now "$_id" remote >/dev/null 2>&1; then echo "result=ok"; else echo "result=fail"; fi
+		;;
+	diag)
+		prepare nolock
+		run_diagnostics
+		report_print_raw
+		;;
+	watch)
+		prepare nolock
+		_m=$(arg 2) _d=$(arg 3)
+		is_mac "$_m" && is_uint "$_d" && [ "$_d" -le 3600 ] || { echo "error=invalid arguments"; return 1; }
+		live_watch_local "$_m" "$_d"
+		;;
+	*)
+		echo "error=unknown agent verb"
+		return 1
+		;;
+	esac
+}
+
+# --------------------------------------------------------------- menu
+interactive_menu() {
+	local _c _a _b _c2
+	prepare nolock
+	orch_show_header
+	while :; do
+		cat >&2 <<'EOF'
+Select operation:
+
+[1] Automatic Configuration
+[2] Advanced Configuration
+[3] Audit Only
+[4] Repair
+[5] Multi-AP Management
+[6] Diagnostics
+[7] Backup / Restore
+[8] Uninstall
+[0] Exit
+EOF
+		printf '> ' >&2
+		read -r _c || exit 0
+		case "$_c" in
+		1) cmd_setup ;;
+		2) ORM_FORCE_INTERACTIVE=1 cmd_advanced ;;
+		3) cmd_audit ;;
+		4) cmd_repair ;;
+		5)
+			printf 'multiap action (list/add/remove/copy-id/discover/status/sync): ' >&2
+			read -r _a _b _c2 || continue
+			ORM_ARGS="$_a$ORM_FS$_b$ORM_FS$_c2$ORM_FS"
+			cmd_multiap
+			;;
+		6) cmd_diag ;;
+		7)
+			printf 'backup action (create/list/verify/restore <id>): ' >&2
+			read -r _a _b || continue
+			ORM_ARGS="$_a$ORM_FS$_b$ORM_FS"
+			cmd_backup
+			;;
+		8) cmd_uninstall ;;
+		0 | q) exit 0 ;;
+		*) log_warn "Unknown choice" ;;
+		esac
+		lock_release
+		printf '\n' >&2
+	done
+}
+
+# ---------------------------------------------------------------- main
+main() {
+	parse_args "$@"
+	case "$ORM_CMD" in
+	'')
+		if [ -t 0 ] && [ -t 2 ]; then
+			interactive_menu
+		else
+			usage
+			exit 1
+		fi
+		;;
+	setup | auto) cmd_setup ;;
+	advanced) cmd_advanced ;;
+	audit) cmd_audit ;;
+	repair) cmd_repair ;;
+	diag | diagnostics) cmd_diag ;;
+	test) cmd_test ;;
+	status) cmd_status ;;
+	detect) cmd_detect ;;
+	backup) cmd_backup ;;
+	rollback) cmd_rollback ;;
+	restore)
+		ORM_ARGS="restore$ORM_FS$ORM_ARGS"
+		cmd_backup
+		;;
+	uninstall) cmd_uninstall ;;
+	mdid) cmd_mdid ;;
+	nr) cmd_nr ;;
+	steer) cmd_steer ;;
+	multiap) cmd_multiap ;;
+	rf) cmd_rf ;;
+	backend) cmd_backend ;;
+	daemon) cmd_daemon ;;
+	agent) cmd_agent ;;
+	boot)
+		ensure_dir "$ORM_STATE"
+		rollback_boot_check
+		;;
+	__watchdog) rollback_watchdog "$(arg 1)" "$(arg 2)" ;;
+	help) usage ;;
+	version) echo "roamctl $ORM_VERSION" ;;
+	*) die "Unknown command '$ORM_CMD' (see roamctl --help)" ;;
+	esac
+}
+
+main "$@"
