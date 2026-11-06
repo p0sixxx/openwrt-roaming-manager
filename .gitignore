@@ -1,0 +1,6 @@
+# local test artefacts
+/dist/
+*.tmp
+*.log
+.staged/
+__pycache__/
