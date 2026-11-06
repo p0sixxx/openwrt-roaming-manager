@@ -1,0 +1,3 @@
+#!/bin/sh
+cat "$MOCK_DIR/log/messages" 2>/dev/null
+exit 0

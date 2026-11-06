@@ -1,0 +1,3 @@
+#!/bin/sh
+[ -f "$MOCK_DIR/net/dns" ] || { echo "nslookup: can't resolve '$1'" >&2; exit 1; }
+printf 'Server:\t\t127.0.0.1\nAddress:\t127.0.0.1:53\n\nName:\t%s\nAddress: 192.0.2.10\n' "$1"

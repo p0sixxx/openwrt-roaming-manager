@@ -1,0 +1,2 @@
+#!/bin/sh
+exec python3 -I "$MOCK_LIB/mockwifi.py" "${1:-reload}"

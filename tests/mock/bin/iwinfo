@@ -1,0 +1,12 @@
+#!/bin/sh
+# Mock iwinfo
+[ $# -eq 0 ] && { cat "$MOCK_DIR"/iwinfo/*.info 2>/dev/null; exit 0; }
+case "${2:-}" in
+info)
+	if [ -f "$MOCK_DIR/iwinfo/$1.info" ]; then cat "$MOCK_DIR/iwinfo/$1.info"
+	elif [ -f "$MOCK_DIR/iwinfo/$1.phyinfo" ]; then cat "$MOCK_DIR/iwinfo/$1.phyinfo"
+	else echo "No such wireless device: $1" >&2; exit 1; fi ;;
+scan) [ -f "$MOCK_DIR/iwinfo/$1.scan" ] && cat "$MOCK_DIR/iwinfo/$1.scan" || { echo "Scanning not possible" >&2; exit 1; } ;;
+assoclist) exit 0 ;;
+*) exit 1 ;;
+esac

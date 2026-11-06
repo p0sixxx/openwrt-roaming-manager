@@ -1,0 +1,54 @@
+#!/bin/sh
+# Mock ubus: objects are directories in $MOCK_DIR/ubus, methods are
+# <method>.json (static) or <method>.sh (dynamic, receives the JSON arg).
+U="$MOCK_DIR/ubus"
+verbose=0
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-v) verbose=1 ;;
+	-t | -s) shift ;;
+	-S) ;;
+	*) break ;;
+	esac
+	shift
+done
+cmd=$1; shift
+case "$cmd" in
+list)
+	pat=${1:-*}
+	found=1
+	for d in "$U"/*; do
+		[ -d "$d" ] || continue
+		o=$(basename "$d")
+		# shellcheck disable=SC2254
+		case "$o" in $pat) ;; *) continue ;; esac
+		found=0
+		if [ "$verbose" = 1 ]; then
+			echo "'$o' @1a2b3c4d"
+			for m in "$d"/*.json "$d"/*.sh; do
+				[ -f "$m" ] || continue
+				m=$(basename "$m"); m=${m%.*}
+				printf '\t"%s":{}\n' "$m"
+			done
+		else
+			echo "$o"
+		fi
+	done
+	[ "$found" = 0 ] || { [ "$pat" = '*' ] && exit 0; echo "Command failed: Not found" >&2; exit 4; }
+	;;
+call)
+	o=$1 m=$2 a=${3:-}
+	[ -n "${MOCK_LOG:-}" ] && echo "ubus call $o $m" >>"$MOCK_LOG"
+	d="$U/$o"
+	[ -d "$d" ] || { echo "Command failed: Not found" >&2; exit 4; }
+	if [ -x "$d/$m.sh" ]; then
+		"$d/$m.sh" "$a"
+	elif [ -f "$d/$m.json" ]; then
+		cat "$d/$m.json"
+	else
+		echo "Command failed: Method not found" >&2
+		exit 4
+	fi
+	;;
+*) echo "Usage: ubus [list|call]" >&2; exit 1 ;;
+esac

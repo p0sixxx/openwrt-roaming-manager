@@ -1,0 +1,28 @@
+#!/bin/sh
+# Mock ssh: runs the remote command against $MOCK_HOSTS/<host> (root + mock)
+host=''
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-i | -p | -o | -l) shift ;;
+	-V) echo "OpenSSH_9.6p1 (mock)" >&2; exit 0 ;;
+	--) shift; break ;;
+	-*) ;;
+	*) break ;;
+	esac
+	shift
+done
+dest=$1; shift
+host=${dest#*@}
+h="$MOCK_HOSTS/$host"
+echo "ssh $host $*" >>"${MOCK_LOG:-/dev/null}"
+if [ ! -d "$h" ] || [ -f "$h/down" ]; then
+	echo "ssh: connect to host $host port 22: Connection timed out" >&2
+	exit 255
+fi
+if [ -f "$h/drop_during_apply" ] && printf '%s' "$*" | grep -q 'agent apply'; then
+	# connection lost while the member applies: remote keeps running, we see 255
+	ORM_SYSROOT="$h/root" MOCK_DIR="$h/mock" sh -c "$*" >/dev/null 2>&1
+	echo "Connection to $host closed by remote host." >&2
+	exit 255
+fi
+ORM_SYSROOT="$h/root" MOCK_DIR="$h/mock" exec sh -c "$*"

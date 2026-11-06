@@ -1,0 +1,33 @@
+#!/bin/sh
+# Mock ping. Reachable: gateway (net/gateway), internet targets (net/internet),
+# hosts listed in net/hosts. Live test: net/ping_loss lists lost sequence numbers.
+count=1 target=''
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-c) count=$2; shift ;;
+	-W | -w | -i | -s | -I) shift ;;
+	-*) ;;
+	*) target=$1 ;;
+	esac
+	shift
+done
+ok=1
+[ "$target" = 127.0.0.1 ] && ok=0
+[ -f "$MOCK_DIR/net/gateway" ] && [ "$target" = "$(cat "$MOCK_DIR/net/gateway")" ] && [ ! -f "$MOCK_DIR/net/gateway_down" ] && ok=0
+case "$target" in 1.1.1.1 | 8.8.8.8) [ -f "$MOCK_DIR/net/internet" ] && ok=0 ;; esac
+grep -qx "$target" "$MOCK_DIR/net/hosts" 2>/dev/null && ok=0
+[ "$ok" = 0 ] || { echo "PING $target: 56 data bytes"; echo "$count packets transmitted, 0 packets received, 100% packet loss"; exit 1; }
+recv=0; seq=0
+echo "PING $target ($target): 56 data bytes"
+while [ "$seq" -lt "$count" ]; do
+	if ! grep -qx "$seq" "$MOCK_DIR/net/ping_loss" 2>/dev/null; then
+		echo "64 bytes from $target: seq=$seq ttl=64 time=1.2 ms"
+		recv=$((recv + 1))
+	fi
+	seq=$((seq + 1))
+	[ -n "${MOCK_PING_DELAY:-}" ] && sleep "$MOCK_PING_DELAY"
+done
+loss=$(( (count - recv) * 100 / count ))
+echo "--- $target ping statistics ---"
+echo "$count packets transmitted, $recv packets received, $loss% packet loss"
+[ "$recv" -gt 0 ]

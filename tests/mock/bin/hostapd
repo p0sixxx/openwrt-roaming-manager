@@ -1,0 +1,7 @@
+#!/bin/sh
+# Mock hostapd: -v prints the version, -v<feature> exits 0 if built in
+case "$1" in
+-v) echo "hostapd v$(cat "$MOCK_DIR/hostapd_version" 2>/dev/null || echo 2.11-devel)"; echo "User space daemon for IEEE 802.11 AP management"; exit 1 ;;
+-v*) f=${1#-v}; grep -qw -- "$f" "$MOCK_DIR/hostapd_features" 2>/dev/null; exit $? ;;
+esac
+exit 1

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Mock dropbearkey: -f FILE creates a fake key, -y prints the public key
+f=''
+while [ $# -gt 0 ]; do case "$1" in -f) f=$2; shift ;; esac; shift; done
+if [ -f "$f" ]; then echo "Public key portion is:"; echo "ssh-ed25519 AAAAC3NzaMOCKKEY roamctl@mock"; exit 0; fi
+echo "MOCK-PRIVATE-KEY" >"$f"

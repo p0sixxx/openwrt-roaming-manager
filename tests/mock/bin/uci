@@ -1,0 +1,295 @@
+#!/bin/sh
+# Mock of OpenWrt's uci(1) for the test-suite.
+# Supports: -q -X -P -c DIR; get set add add_list del_list delete show
+#           changes commit revert. Staged changes live in DIR/.staged.
+# Lists, anonymous sections (@type[N], cfgXXXXXX) and quoting follow uci.
+
+quiet=0 showx=0 confdir=${ORM_UCI_CONFDIR:-/etc/config}
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-q) quiet=1 ;;
+	-X) showx=1 ;;
+	-c) confdir=$2; shift ;;
+	-P) shift ;;
+	-*) ;;
+	*) break ;;
+	esac
+	shift
+done
+cmd=$1
+[ $# -gt 0 ] && shift
+arg=${1:-}
+stage="$confdir/.staged"
+
+fail() {
+	[ "$quiet" = 1 ] || echo "uci: ${1:-Entry not found}" >&2
+	exit 1
+}
+
+cfgname() { printf '%s' "${1%%.*}" | sed 's/=.*//'; }
+
+src_file() {
+	if [ -f "$stage/$1" ]; then echo "$stage/$1"; elif [ -f "$confdir/$1" ]; then echo "$confdir/$1"; else return 1; fi
+}
+
+run_awk() {
+	# run_awk FILE OP PATH VALUE
+	awk -v op="$2" -v path="$3" -v value="$4" -v cfg="$5" -v showx="$showx" '
+	function unq(s,   out, i, c, qq) {
+		# parse a uci token: quoted with single/double quotes or bare
+		out = ""; qq = ""
+		for (i = 1; i <= length(s); i++) {
+			c = substr(s, i, 1)
+			if (qq == "") {
+				if (c == "\047" || c == "\"") qq = c
+				else if (c == "\\") { i++; out = out substr(s, i, 1) }
+				else out = out c
+			} else if (c == qq) qq = ""
+			else if (c == "\\" && qq == "\"") { i++; out = out substr(s, i, 1) }
+			else out = out c
+		}
+		return out
+	}
+	function q(s) { gsub(/\047/, "\047\\\047\047", s); return "\047" s "\047" }
+	function addsec(name, type, isanon) {
+		ns++; sname[ns] = name; stype[ns] = type; sanon[ns] = isanon; sdel[ns] = 0; nopt[ns] = 0
+		return ns
+	}
+	function anonid(i) { return sprintf("cfg%02x%04x", i, (i * 4919) % 65536) }
+	function setopt(i, o, v,   k) {
+		if (!((i, o) in otype)) { nopt[i]++; oname[i, nopt[i]] = o }
+		otype[i, o] = "o"; oval[i, o] = v; lcnt[i, o] = 0
+	}
+	function addlist(i, o, v) {
+		if (!((i, o) in otype)) { nopt[i]++; oname[i, nopt[i]] = o; otype[i, o] = "l"; lcnt[i, o] = 0 }
+		if (otype[i, o] == "o") { otype[i, o] = "l"; lcnt[i, o] = 1; lval[i, o, 1] = oval[i, o] }
+		lcnt[i, o]++; lval[i, o, lcnt[i, o]] = v
+	}
+	function delopt(i, o) { delete otype[i, o] }
+	# split a config line into keyword + up to two tokens
+	function tokens(line,   n, i, c, cur, inq) {
+		ntok = 0; cur = ""; inq = ""; started = 0
+		for (i = 1; i <= length(line); i++) {
+			c = substr(line, i, 1)
+			if (inq != "") {
+				cur = cur c
+				if (c == inq) inq = ""
+				else if (c == "\\" && inq == "\"") { i++; cur = cur substr(line, i, 1) }
+			} else if (c == " " || c == "\t") {
+				if (started) { tok[++ntok] = cur; cur = ""; started = 0 }
+			} else if (c == "#" && !started) { break }
+			else {
+				if (c == "\047" || c == "\"") inq = c
+				cur = cur c; started = 1
+			}
+		}
+		if (started) tok[++ntok] = cur
+	}
+	# resolve "section" part of a path -> index (0 = missing)
+	function resolve(s,   i, t, n, cnt, idx) {
+		if (s ~ /^@.*\[-?[0-9]+\]$/) {
+			t = s; sub(/^@/, "", t); sub(/\[.*/, "", t)
+			n = s; sub(/.*\[/, "", n); sub(/\]$/, "", n); n += 0
+			cnt = 0
+			for (i = 1; i <= ns; i++) if (!sdel[i] && stype[i] == t) { cnt++; list[cnt] = i }
+			if (n < 0) n = cnt + n
+			if (n < 0 || n >= cnt) return 0
+			return list[n + 1]
+		}
+		for (i = 1; i <= ns; i++) if (!sdel[i] && sname[i] == s) return i
+		return 0
+	}
+	function dispname(i,   t, n, j) {
+		if (!sanon[i] || showx) return sname[i]
+		t = stype[i]; n = 0
+		for (j = 1; j < i; j++) if (!sdel[j] && stype[j] == t) n++
+		return "@" t "[" n "]"
+	}
+	function showsec(i,   k, o, j, line) {
+		print cfg "." dispname(i) "=" stype[i]
+		for (k = 1; k <= nopt[i]; k++) {
+			o = oname[i, k]
+			if (!((i, o) in otype)) continue
+			if (otype[i, o] == "o") print cfg "." dispname(i) "." o "=" q(oval[i, o])
+			else {
+				line = ""
+				for (j = 1; j <= lcnt[i, o]; j++) line = line (j > 1 ? " " : "") q(lval[i, o, j])
+				print cfg "." dispname(i) "." o "=" line
+			}
+		}
+	}
+	function dump(   i, k, o, j) {
+		for (i = 1; i <= ns; i++) {
+			if (sdel[i]) continue
+			printf "\nconfig %s", stype[i]
+			if (!sanon[i]) printf " %s", q(sname[i])
+			printf "\n"
+			for (k = 1; k <= nopt[i]; k++) {
+				o = oname[i, k]
+				if (!((i, o) in otype)) continue
+				if (otype[i, o] == "o") printf "\toption %s %s\n", o, q(oval[i, o])
+				else for (j = 1; j <= lcnt[i, o]; j++) printf "\tlist %s %s\n", o, q(lval[i, o, j])
+			}
+		}
+		printf "\n"
+	}
+	BEGIN { ns = 0; cur = 0 }
+	{
+		tokens($0)
+		if (ntok == 0) next
+		if (tok[1] == "config") {
+			if (ntok >= 3) cur = addsec(unq(tok[3]), unq(tok[2]), 0)
+			else { cur = addsec("", unq(tok[2]), 1); sname[cur] = anonid(cur) }
+		} else if (tok[1] == "option" && cur) setopt(cur, unq(tok[2]), unq(tok[3]))
+		else if (tok[1] == "list" && cur) addlist(cur, unq(tok[2]), unq(tok[3]))
+	}
+	END {
+		# path = section[.option]
+		sec = path; opt = ""
+		if (index(path, ".") > 0) { sec = substr(path, 1, index(path, ".") - 1); opt = substr(path, index(path, ".") + 1) }
+		i = (sec == "") ? 0 : resolve(sec)
+		if (op == "get") {
+			if (!i) exit 1
+			if (opt == "") { print stype[i]; exit 0 }
+			if (!((i, opt) in otype)) exit 1
+			if (otype[i, opt] == "o") print oval[i, opt]
+			else { line = ""; for (j = 1; j <= lcnt[i, opt]; j++) line = line (j > 1 ? " " : "") lval[i, opt, j]; print line }
+			exit 0
+		}
+		if (op == "show") {
+			if (sec == "") { for (k = 1; k <= ns; k++) if (!sdel[k]) showsec(k); exit 0 }
+			if (!i) exit 1
+			if (opt == "") { showsec(i); exit 0 }
+			if (!((i, opt) in otype)) exit 1
+			if (otype[i, opt] == "o") print cfg "." dispname(i) "." opt "=" q(oval[i, opt])
+			else { line = ""; for (j = 1; j <= lcnt[i, opt]; j++) line = line (j > 1 ? " " : "") q(lval[i, opt, j]); print cfg "." dispname(i) "." opt "=" line }
+			exit 0
+		}
+		if (op == "set") {
+			if (opt == "") {
+				if (sec ~ /^@/) exit 2
+				if (sec !~ /^[A-Za-z0-9_]+$/) exit 2
+				if (i) stype[i] = value; else addsec(sec, value, 0)
+			} else {
+				if (!i) exit 1
+				setopt(i, opt, value)
+			}
+			dump(); exit 0
+		}
+		if (op == "add") {
+			k = addsec("", value, 1); sname[k] = anonid(k)
+			print sname[k] > "/dev/stderr"
+			dump(); exit 0
+		}
+		if (op == "add_list") { if (!i || opt == "") exit 1; addlist(i, opt, value); dump(); exit 0 }
+		if (op == "del_list") {
+			if (!i || !((i, opt) in otype)) exit 1
+			n = 0
+			for (j = 1; j <= lcnt[i, opt]; j++) if (lval[i, opt, j] != value) { n++; tmp[n] = lval[i, opt, j] }
+			for (j = 1; j <= n; j++) lval[i, opt, j] = tmp[j]
+			lcnt[i, opt] = n
+			dump(); exit 0
+		}
+		if (op == "delete") {
+			if (!i) exit 1
+			if (opt == "") sdel[i] = 1
+			else { if (!((i, opt) in otype)) exit 1; delopt(i, opt) }
+			dump(); exit 0
+		}
+		exit 3
+	}' "$1"
+}
+
+modify() {
+	# modify OP PATH VALUE
+	c=$(cfgname "$2")
+	[ -f "$confdir/$c" ] || [ -f "$stage/$c" ] || fail "Entry not found"
+	mkdir -p "$stage"
+	[ -f "$stage/$c" ] || cp "$confdir/$c" "$stage/$c"
+	rest=${2#"$c"}
+	rest=${rest#.}
+	out=$(run_awk "$stage/$c" "$1" "$rest" "$3" "$c" 2>"$stage/.err.$$") || {
+		rm -f "$stage/.err.$$"
+		fail "Invalid argument"
+	}
+	printf '%s\n' "$out" >"$stage/$c"
+	if [ "$1" = add ]; then cat "$stage/.err.$$"; fi
+	rm -f "$stage/.err.$$"
+	[ -n "${MOCK_LOG:-}" ] && echo "uci $1 $2${3:+=<value>}" >>"$MOCK_LOG"
+	return 0
+}
+
+case "$cmd" in
+get)
+	c=$(cfgname "$arg")
+	f=$(src_file "$c") || fail
+	rest=${arg#"$c"}
+	rest=${rest#.}
+	[ -n "$rest" ] || fail
+	run_awk "$f" get "$rest" "" "$c" || fail
+	;;
+show)
+	if [ -z "$arg" ]; then
+		for f in "$confdir"/*; do
+			[ -f "$f" ] || continue
+			c=$(basename "$f")
+			run_awk "$(src_file "$c")" show "" "" "$c"
+		done
+		exit 0
+	fi
+	c=$(cfgname "$arg")
+	f=$(src_file "$c") || fail
+	rest=${arg#"$c"}
+	rest=${rest#.}
+	run_awk "$f" show "$rest" "" "$c" || fail
+	;;
+set)
+	p=${arg%%=*}
+	v=${arg#*=}
+	[ "$p" != "$arg" ] || fail "Invalid argument"
+	modify set "$p" "$v"
+	;;
+add)
+	modify add "$arg." "$2"
+	;;
+add_list)
+	p=${arg%%=*}
+	v=${arg#*=}
+	modify add_list "$p" "$v"
+	;;
+del_list)
+	p=${arg%%=*}
+	v=${arg#*=}
+	modify del_list "$p" "$v"
+	;;
+delete)
+	modify delete "$arg" ""
+	;;
+changes)
+	for f in "$stage"/*; do
+		[ -f "$f" ] || continue
+		c=$(basename "$f")
+		[ -n "$arg" ] && [ "$c" != "$arg" ] && continue
+		if ! cmp -s "$f" "$confdir/$c" 2>/dev/null; then
+			echo "$c: modified"
+		fi
+	done
+	;;
+commit)
+	for f in "$stage"/*; do
+		[ -f "$f" ] || continue
+		c=$(basename "$f")
+		[ -n "$arg" ] && [ "$c" != "$arg" ] && continue
+		[ -n "${MOCK_UCI_COMMIT_FAIL:-}" ] && [ "$c" = "$MOCK_UCI_COMMIT_FAIL" ] && fail "commit failed (mock)"
+		mv -f "$f" "$confdir/$c"
+		[ -n "${MOCK_LOG:-}" ] && echo "uci commit $c" >>"$MOCK_LOG"
+	done
+	;;
+revert)
+	if [ -n "$arg" ]; then rm -f "$stage/${arg%%.*}"; else rm -rf "$stage"; fi
+	;;
+*)
+	fail "unsupported command $cmd"
+	;;
+esac
+exit 0

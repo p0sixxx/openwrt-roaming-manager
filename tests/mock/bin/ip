@@ -1,0 +1,15 @@
+#!/bin/sh
+# Mock ip (route/addr/neigh subsets)
+args=" $* "
+case "$args" in
+*" route "*)
+	[ -f "$MOCK_DIR/net/gateway" ] && echo "default via $(cat "$MOCK_DIR/net/gateway") dev br-lan proto static"
+	echo "192.168.1.0/24 dev br-lan proto kernel scope link src $(cat "$MOCK_DIR/net/lanip" 2>/dev/null || echo 192.168.1.1)"
+	;;
+*" addr "*)
+	echo "5: br-lan: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP"
+	echo "    inet $(cat "$MOCK_DIR/net/lanip" 2>/dev/null || echo 192.168.1.1)/24 brd 192.168.1.255 scope global br-lan"
+	;;
+*" neigh "*) cat "$MOCK_DIR/net/neigh" 2>/dev/null ;;
+esac
+exit 0

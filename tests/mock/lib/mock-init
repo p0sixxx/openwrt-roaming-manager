@@ -1,0 +1,26 @@
+#!/bin/sh
+# Generic mock procd init script (usteer, dawn, roamctl, dnsmasq ...)
+name=$(basename "$0")
+R=$ORM_SYSROOT
+S="$MOCK_DIR/svc"
+mkdir -p "$S" "$R/etc/rc.d"
+echo "init $name $1" >>"${MOCK_LOG:-/dev/null}"
+start() {
+	[ -f "$MOCK_DIR/svc_fail_$name" ] && return 1
+	touch "$S/$name.running"
+	"$MOCK_LIB/svc_hook.sh" "$name" start
+}
+stop() {
+	rm -f "$S/$name.running"
+	"$MOCK_LIB/svc_hook.sh" "$name" stop
+}
+case "$1" in
+enable) touch "$R/etc/rc.d/S99$name" ;;
+disable) rm -f "$R/etc/rc.d/S99$name" ;;
+enabled) [ -e "$R/etc/rc.d/S99$name" ] ;;
+start | boot) start ;;
+stop) stop ;;
+restart | reload) stop; start ;;
+running) [ -f "$S/$name.running" ] ;;
+*) exit 1 ;;
+esac
