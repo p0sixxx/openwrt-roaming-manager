@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: ShellCheck, syntax, structure, secrets
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y busybox dash
+          pip install --user shellcheck-py==0.11.0.1
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: ShellCheck (product code)
+        run: |
+          shellcheck --version
+          shellcheck -x roamctl core/*.sh roaming/*.sh steering/*.sh multiap/*.sh \
+            diagnostics/*.sh install/*.sh files/roamctl.init
+      - name: ShellCheck (tests and mocks)
+        run: |
+          shellcheck -S warning -e SC2154,SC2030,SC2031,SC1091 tests/run.sh tests/lib/testlib.sh \
+            tests/ci/*.sh tests/mock/bin/* tests/mock/lib/*.sh tests/mock/lib/mock-init
+      - name: POSIX syntax (dash, BusyBox ash, bash --posix)
+        run: tests/ci/check_syntax.sh
+      - name: Repository structure
+        run: tests/ci/check_structure.sh
+      - name: Secret scan
+        run: tests/ci/check_secrets.sh
+
+  test:
+    name: ${{ matrix.suite }} (${{ matrix.shell }})
+    runs-on: ubuntu-24.04
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [dash, busybox]
+        suite: [unit, integration, regression]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          # dynamic busybox: honours PATH like OpenWrt's BusyBox (busybox-static prefers applets)
+          sudo apt-get install -y busybox dash python3
+      - name: Run ${{ matrix.suite }} tests
+        run: |
+          if [ "${{ matrix.shell }}" = busybox ]; then
+            tests/run.sh --busybox ${{ matrix.suite }}
+          else
+            TEST_SH=dash tests/run.sh ${{ matrix.suite }}
+          fi
+
+  openwrt:
+    name: OpenWrt ${{ matrix.openwrt }} scenarios
+    runs-on: ubuntu-24.04
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        openwrt: ["24.10", "25"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y busybox dash python3
+      - name: Release scenarios for OpenWrt ${{ matrix.openwrt }}
+        env:
+          TEST_OPENWRT: ${{ matrix.openwrt }}
+        run: tests/run.sh --busybox --filter release_scenarios integration

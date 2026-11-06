@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release (vX.Y.Z)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: Verify tag and run all checks
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y busybox dash python3
+          pip install --user shellcheck-py==0.11.0.1
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Version must match the tag (SemVer)
+        id: ver
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          v=$(sed -n 's/^ORM_VERSION="\(.*\)"/\1/p' core/common.sh)
+          echo "tag=$tag version=$v"
+          [ "v$v" = "$tag" ] || { echo "::error::tag $tag does not match ORM_VERSION $v"; exit 1; }
+          grep -q "^## \[$v\]" CHANGELOG.md || { echo "::error::CHANGELOG.md has no entry for $v"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: ShellCheck
+        run: shellcheck -x roamctl core/*.sh roaming/*.sh steering/*.sh multiap/*.sh diagnostics/*.sh install/*.sh files/roamctl.init
+      - name: Syntax, structure, secrets
+        run: tests/ci/check_syntax.sh && tests/ci/check_structure.sh && tests/ci/check_secrets.sh
+      - name: Full test suite (dash)
+        run: TEST_SH=dash tests/run.sh
+      - name: Full test suite (BusyBox ash)
+        run: tests/run.sh --busybox
+
+  release:
+    name: Build and publish
+    needs: verify
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - name: Build release archive
+        run: |
+          v=${{ needs.verify.outputs.version }}
+          d=openwrt-roaming-manager-$v
+          mkdir -p "dist/$d"
+          cp -R roamctl core roaming steering multiap diagnostics config install files docs \
+            README.md README_RU.md CHANGELOG.md LICENSE SECURITY.md "dist/$d/"
+          tar -C dist -czf "dist/$d.tar.gz" "$d"
+          (cd dist && sha256sum "$d.tar.gz" > "$d.tar.gz.sha256")
+          awk -v v="$v" '/^## \[/{p=($0 ~ "\\[" v "\\]")} p' CHANGELOG.md > dist/RELEASE_NOTES.md
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v=${{ needs.verify.outputs.version }}
+          gh release create "v$v" "dist/openwrt-roaming-manager-$v.tar.gz" \
+            "dist/openwrt-roaming-manager-$v.tar.gz.sha256" \
+            --title "OpenWrt Roaming Manager $v" --notes-file dist/RELEASE_NOTES.md --verify-tag
