@@ -1,0 +1,8 @@
+# roamctl targets POSIX sh as implemented by BusyBox ash (OpenWrt) and dash.
+# Modules are sourced by the main script.
+shell=sh
+external-sources=true
+# SC3043: "local" is used deliberately: BusyBox ash (OpenWrt), dash and bash all
+#         support it and OpenWrt's own shell libraries rely on it.
+# SC2034: variables used by sourcing modules
+disable=SC2034,SC3043
