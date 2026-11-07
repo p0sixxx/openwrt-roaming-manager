@@ -107,6 +107,7 @@ sc_defaults() {
 	SC_INTERNET=1 SC_DNS=1 SC_GATEWAY=192.168.1.254 SC_LANIP=192.168.1.1
 	SC_BASEMAC=02:11:22:33 SC_NOISE=-92
 	SC_SSID=HomeNet SC_KEY=correct-horse-battery SC_ENC=psk2
+	SC_CORES=2 SC_MEM_KB=524288 SC_FLASH_FREE_KB=''
 }
 
 sc_wireless_default() {
@@ -185,7 +186,7 @@ fx_build() {
 	. "$SCEN_DIR/$1.sh" || return 1
 	# per-test overrides: FXO_<VAR>=value
 	for _v in SC_OS SC_PKG SC_HANDLER SC_UCI_UNSUPPORTED SC_WNM SC_RRM SC_REJECT SC_WIFI_FAIL \
-		SC_FEATURES SC_WPAD SC_PKGS SC_AVAILABLE SC_INTERNET SC_DNS SC_BASEMAC SC_KEY SC_ENC SC_SSID SC_PHYS SC_NOISE; do
+		SC_FEATURES SC_WPAD SC_PKGS SC_AVAILABLE SC_FLASH_FREE_KB SC_CORES SC_MEM_KB SC_INTERNET SC_DNS SC_BASEMAC SC_KEY SC_ENC SC_SSID SC_PHYS SC_NOISE; do
 		eval "_o=\${FXO_$_v-__unset__}"
 		# shellcheck disable=SC2154
 		[ "$_o" != __unset__ ] && eval "$_v=\$_o"
@@ -203,6 +204,10 @@ DISTRIB_ARCH='$SC_ARCH'
 DISTRIB_DESCRIPTION='OpenWrt $SC_OS'
 EOF
 	printf '%s' "$SC_COMPAT" | tr ' ' '\000' >"$R/proc/device-tree/compatible"
+	_i=0
+	while [ "$_i" -lt "$SC_CORES" ]; do printf 'processor\t: %s\ncpu model\t: %s\n\n' "$_i" "$SC_CPU"; _i=$((_i + 1)); done >"$R/proc/cpuinfo"
+	printf 'MemTotal:       %s kB\nMemFree:        %s kB\n' "$SC_MEM_KB" "$((SC_MEM_KB / 3))" >"$R/proc/meminfo"
+	[ -n "$SC_FLASH_FREE_KB" ] && echo "$SC_FLASH_FREE_KB" >"$M/flash_free_kb"
 	printf '\000' >>"$R/proc/device-tree/compatible"
 	sc_wireless >"$R/etc/config/wireless"
 	chmod 600 "$R/etc/config/wireless"

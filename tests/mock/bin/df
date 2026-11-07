@@ -1,0 +1,10 @@
+#!/bin/sh
+# Mock df: free flash of the device from $MOCK_DIR/flash_free_kb
+if [ -f "$MOCK_DIR/flash_free_kb" ]; then
+	f=$(cat "$MOCK_DIR/flash_free_kb")
+	echo "Filesystem           1024-blocks    Used Available Capacity Mounted on"
+	echo "overlayfs:/overlay          5248  $((5248 - f))      $f      50% /overlay"
+	exit 0
+fi
+for d in /bin/df /usr/bin/df; do [ -x "$d" ] && exec "$d" "$@"; done
+exit 1

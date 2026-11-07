@@ -25,7 +25,7 @@ test_policy_time_hysteresis_and_settling() {
 	fx_new filogic-2410
 	mod_run "$POL_SETUP"'
 	pol_decide $M 5g -85 1 10 1 1000 "$C"
-	rm -rf "$ORM_STATE/steer"
+	POL_DB="" POL_DB_LOADED=1
 	pol_decide $M 5g -85 1 600 1 1000 "$C"
 	pol_decide $M 5g -85 1 600 1 1001 "$C"
 	pol_decide $M 5g -85 1 600 1 1002 "$C"'

@@ -39,9 +39,9 @@ rc=255"
 # Release scenario matrix (CI runs each with TEST_OPENWRT=24.10 / 25)
 test_release_scenarios() {
 	case "${TEST_OPENWRT:-all}" in
-	24.10) scen="filogic-2410 qualcomm-ipq807x" ;;
-	25) scen="filogic-25 filogic-mt7988-6g" ;;
-	*) scen="filogic-2410 filogic-25" ;;
+	24.10) scen="filogic-2410 ramips-mt7621" ;;
+	25) scen="filogic-25 filogic-mt7988-6g ramips-mt7621-ac2100" ;;
+	*) scen="filogic-2410 filogic-25 ramips-mt7621" ;;
 	esac
 	for s in $scen; do
 		fx_new "$s"

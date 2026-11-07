@@ -75,6 +75,8 @@ run_awk() {
 				cur = cur c
 				if (c == inq) inq = ""
 				else if (c == "\\" && inq == "\"") { i++; cur = cur substr(line, i, 1) }
+			} else if (c == "\\") {
+				cur = cur c substr(line, i + 1, 1); i++; started = 1
 			} else if (c == " " || c == "\t") {
 				if (started) { tok[++ntok] = cur; cur = ""; started = 0 }
 			} else if (c == "#" && !started) { break }
