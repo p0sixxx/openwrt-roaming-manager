@@ -6,6 +6,26 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- MediaTek MT7621 (ramips) support as additional access points: SoC
+  detection, `mt7603e`/`mt76x2e`/`mt7615e` drivers, mock scenarios for
+  Xiaomi 4A Gigabit (24.10) and Redmi AC2100 (25.12), mixed
+  Filogic + MT7621 multi-AP test.
+- Device resource detection (CPU cores, RAM, free flash, device class).
+- Free flash check before package installation and in the installer;
+  fewer backup generations on nearly full flash.
+- Members report the steering backend they actually use to the
+  controller.
+
+### Changed
+- Detection and the native steering daemon no longer spawn a process
+  per lookup: in-memory capability store, generation checked `uci show`
+  cache, in-memory steering state saved once per tick. Detection uses
+  ~70 % fewer processes; a steering tick ~50 instead of ~1700 processes
+  for 10 clients.
+- Random numbers use BusyBox `hexdump` (always present on OpenWrt),
+  `od` only as a fallback.
+
 ## [1.0.0] - 2026-11-06
 
 First release.

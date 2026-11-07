@@ -58,9 +58,13 @@ running hostapd.
 | 22.03 / 23.05 | opkg | best effort (legacy shell netifd handler) |
 | ≤ 21.02 | opkg | not supported |
 
-Hardware: any mac80211 (softmac) driver works — MediaTek mt76 (MT7981,
-MT7986, MT7987, MT7988, MT7915/MT7916/MT7996), Qualcomm ath9k/ath10k/
-ath11k/ath12k, Realtek rtw88/rtw89 and others. Fullmac drivers
+Hardware: any mac80211 (softmac) driver works. Primary targets are
+MediaTek Filogic (MT7981, MT7986, MT7987, MT7988) for the main router and
+**MediaTek MT7621 (ramips) for additional access points** (MT7603E,
+MT7612E, MT7615E, MT7915E). On these MIPS devices roamctl checks free flash before installing packages, keeps
+fewer backups, uses lighter daemon settings and avoids spawning
+processes in its hot paths. Qualcomm ath9k/ath10k/ath11k/ath12k, Realtek
+rtw88/rtw89 and others work as well. Fullmac drivers
 (e.g. Broadcom `brcmfmac`) implement authentication in firmware: roamctl
 reports 802.11r/k/v as *not supported* there instead of enabling them.
 
@@ -348,9 +352,11 @@ service states and offers to remove packages roamctl installed.
 * The live test samples once per second; the association gap is an upper
   bound with 1 s resolution. Multi-AP live tests need synchronised clocks
   (NTP).
-* MediaTek, Qualcomm and Broadcom support has been verified in the mock
-  environment only — **not yet on real hardware** (see
-  [docs/compatibility.md](docs/compatibility.md)).
+* MediaTek Filogic, MT7621, Qualcomm and Broadcom support has
+  been verified in the mock environment only — **not yet on real
+  hardware** (see [docs/compatibility.md](docs/compatibility.md)).
+* If the flash is almost full usteer may not fit; roamctl then uses its
+  built-in steering backend.
 
 ## Development and tests
 
