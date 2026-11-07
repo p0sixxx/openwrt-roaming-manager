@@ -5,14 +5,23 @@
 # (ubus network.wireless status) and the BSSIDs of running interfaces.
 
 wl_list_ifaces() {
-	orm_uci -X show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.=]*\)=wifi-iface$/\1/p'
+	uci_cache_ensure wireless
+	printf '%s' "$ORM_WL_SHOW" | sed -n 's/^wireless\.\([^.=]*\)=wifi-iface$/\1/p'
+}
+
+wl_cache_load() {
+	uci_cache_drop
+	uci_cache_ensure wireless
+}
+
+wl_cache_reset() {
+	uci_cache_drop
 }
 
 wl_get() {
-	local _wg
 	# wl_get SECTION OPTION [DEFAULT]
-	_wg=$(orm_uci -q get "wireless.$1.$2") || _wg=${3:-}
-	printf '%s' "$_wg"
+	uci_cached_get wireless "$1" "$2" "${3:-}"
+	return 0
 }
 
 # Normalise the UCI "encryption" value to a security family:
@@ -84,6 +93,8 @@ wl_iface_runtime() {
 }
 
 wl_detect_all() {
+	local _ifaces _s _dev _enc _key _o
+	wl_cache_load
 	local _ifaces _s _dev _enc _key _o
 	[ -n "${ORM_WSTATUS:-}" ] || {
 		have_cmd ubus && ORM_WSTATUS=$(ubus call network.wireless status 2>/dev/null)

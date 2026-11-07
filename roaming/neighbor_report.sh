@@ -76,6 +76,7 @@ nr_validate() {
 # nr_collect_local HOSTLABEL -> number of valid entries collected
 nr_collect_local() {
 	local _host _db _tmp _cnt _g _gssid _s _if _own _b _ss _h _oc
+	uci_cache_warm
 	_host=${1:-local}
 	_db=$(nr_db)
 	_tmp="$ORM_STATE/nr.local.$$"
@@ -164,6 +165,7 @@ nr_count_for() {
 # Install neighbor lists into every local BSS of every group.
 nr_apply_local() {
 	local _rc _g _s _if _b _js
+	uci_cache_warm
 	_rc=0
 	for _g in $(roam_groups); do
 		for _s in $(roam_get "$_g.iface"); do
@@ -198,6 +200,7 @@ nr_installed_count() {
 # BSS changed (channel switch -> new operating class/channel).
 nr_maintain() {
 	local _changed _before _after _g _s _if _b _want _have
+	uci_cache_warm
 	_changed=0
 	_before=$(awk -F "$ORM_FS" '$2 == "local" {print $4, $6}' "$(nr_db)" 2>/dev/null | sort)
 	nr_collect_local local >/dev/null

@@ -33,13 +33,138 @@ have_cmd() {
 	command -v "$1" >/dev/null 2>&1
 }
 
-# uci wrapper honouring the (test) config directory.
+# uci wrapper honouring the (test) config directory. Every modifying call
+# bumps a generation counter so cached "uci show" snapshots (see
+# uci_cached_get) are invalidated in this and in every other process.
 orm_uci() {
+	local _ua _uw _urc
+	_uw=0
+	for _ua in "$@"; do
+		case "$_ua" in
+		-*) continue ;;
+		set | add | add_list | del_list | delete | commit | revert | rename | reorder | import | batch) _uw=1 ;;
+		esac
+		break
+	done
 	if [ -n "$ORM_SYSROOT" ]; then
 		uci -c "$ORM_UCI_CONFDIR" "$@"
 	else
 		uci "$@"
 	fi
+	_urc=$?
+	[ "$_uw" = 1 ] && uci_gen_bump
+	return $_urc
+}
+
+# ------------------------------------------------------- cached uci reads
+# One "uci -X show <config>" snapshot replaces dozens of "uci get" calls
+# (each a process - expensive on MT7628/MT7621 class MIPS CPUs). The
+# snapshot is reused while the generation counter is unchanged.
+ORM_NL='
+'
+ORM_WL_SHOW='' ORM_WL_GEN='' ORM_RC_SHOW='' ORM_RC_GEN=''
+
+uci_gen_now() {
+	ORM_UCI_GEN=0
+	[ -r "$ORM_STATE/uci.gen" ] && read -r ORM_UCI_GEN <"$ORM_STATE/uci.gen"
+	case "$ORM_UCI_GEN" in "" | *[!0-9]*) ORM_UCI_GEN=0 ;; esac
+}
+
+uci_gen_bump() {
+	uci_gen_now
+	echo "$((ORM_UCI_GEN + 1))" >"$ORM_STATE/uci.gen" 2>/dev/null
+	ORM_WL_SHOW='' ORM_RC_SHOW=''
+}
+
+# Load both snapshots in the current shell (call before loops whose
+# bodies read through $(...) - a subshell cannot fill the parent's cache)
+uci_cache_warm() {
+	uci_cache_ensure wireless
+	uci_cache_ensure roamctl
+}
+
+uci_cache_drop() {
+	ORM_WL_SHOW='' ORM_RC_SHOW=''
+}
+
+# uci_cache_ensure wireless|roamctl -> refreshes ORM_WL_SHOW / ORM_RC_SHOW
+uci_cache_ensure() {
+	uci_gen_now
+	case "$1" in
+	wireless)
+		if [ -z "$ORM_WL_SHOW" ] || [ "$ORM_WL_GEN" != "$ORM_UCI_GEN" ]; then
+			ORM_WL_SHOW="$ORM_NL$(orm_uci -X show wireless 2>/dev/null)$ORM_NL"
+			ORM_WL_GEN=$ORM_UCI_GEN
+		fi
+		;;
+	roamctl)
+		if [ -z "$ORM_RC_SHOW" ] || [ "$ORM_RC_GEN" != "$ORM_UCI_GEN" ]; then
+			ORM_RC_SHOW="$ORM_NL$(orm_uci -X show roamctl 2>/dev/null)$ORM_NL"
+			ORM_RC_GEN=$ORM_UCI_GEN
+		fi
+		;;
+	esac
+}
+
+# uci_cached_v CONFIG SECTION OPTION [DEFAULT] -> sets UCI_V (no output,
+# no subshell: use in loops). Returns 1 if the option does not exist.
+# Same value as "uci -q get"; lists are returned space separated. Values
+# whose quoting cannot be decoded unambiguously fall back to uci.
+uci_cached_v() {
+	local _cs _raw
+	UCI_V=${4:-}
+	case "$1" in
+	wireless) uci_cache_ensure wireless; _cs=$ORM_WL_SHOW ;;
+	roamctl) uci_cache_ensure roamctl; _cs=$ORM_RC_SHOW ;;
+	*)
+		UCI_V=$(orm_uci -q get "$1.$2.$3") && return 0
+		UCI_V=${4:-}
+		return 1
+		;;
+	esac
+	case "$_cs" in
+	*"${ORM_NL}$1.$2.$3="*) ;;
+	*) return 1 ;;
+	esac
+	_raw=${_cs#*"${ORM_NL}$1.$2.$3="}
+	_raw=${_raw%%"$ORM_NL"*}
+	case "$_raw" in
+	*"'\\''"*"' '"* | *"' '"*"'\\''"* | [!\']* | *[!\'])
+		# escaped quotes inside a list or unexpected format: ask uci
+		UCI_V=$(orm_uci -q get "$1.$2.$3") && return 0
+		UCI_V=${4:-}
+		return 1
+		;;
+	esac
+	_raw=${_raw#\'}
+	_raw=${_raw%\'}
+	UCI_V=''
+	while :; do
+		case "$_raw" in
+		*"'\\''"*)
+			UCI_V="$UCI_V${_raw%%"'\\''"*}'"
+			_raw=${_raw#*"'\\''"}
+			;;
+		*"' '"*)
+			UCI_V="$UCI_V${_raw%%"' '"*} "
+			_raw=${_raw#*"' '"}
+			;;
+		*)
+			UCI_V="$UCI_V$_raw"
+			break
+			;;
+		esac
+	done
+	return 0
+}
+
+# uci_cached_get CONFIG SECTION OPTION [DEFAULT] -> prints the value
+uci_cached_get() {
+	local _rc
+	uci_cached_v "$@"
+	_rc=$?
+	printf '%s' "$UCI_V"
+	return $_rc
 }
 
 ensure_dir() {
@@ -151,7 +276,12 @@ random_hex() {
 	# random_hex NBYTES
 	_rh_src=${ORM_URANDOM:-/dev/urandom}
 	[ -r "$_rh_src" ] || return 1
-	_rh=$(od -An -tx1 -N"$1" "$_rh_src" 2>/dev/null | tr -d ' \n')
+	# hexdump is part of every OpenWrt BusyBox; od is not always built in
+	if have_cmd hexdump; then
+		_rh=$(hexdump -v -n "$1" -e '1/1 "%02x"' "$_rh_src" 2>/dev/null)
+	else
+		_rh=$(od -An -tx1 -N"$1" "$_rh_src" 2>/dev/null | tr -d ' \n')
+	fi
 	[ "${#_rh}" -eq $(($1 * 2)) ] || return 1
 	printf '%s' "$_rh"
 }

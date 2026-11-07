@@ -5,6 +5,13 @@
 # and kernel. Results are written to the capability store (caps_*).
 
 # ---------------------------------------------------------- capability store
+# Facts are kept in memory (ORM_CAPS, newline separated "key=value", last
+# value wins) so lookups need no extra process - important on single core
+# MIPS SoCs such as MT7628 where every fork costs milliseconds. The file
+# copy is the source of truth for subshells and other processes; after a
+# subshell may have written facts, caps_reload re-reads it.
+ORM_CAPS=''
+
 caps_file() {
 	printf '%s/caps' "$ORM_STATE"
 }
@@ -14,30 +21,61 @@ caps_file() {
 caps_reset() {
 	local _cf _keep
 	ensure_dir "$ORM_STATE" 0755
-	_cf=$(caps_file)
+	_cf="$ORM_STATE/caps"
 	_keep=''
 	[ "${ORM_CAPS_INIT:-0}" = 1 ] && _keep=$(grep '^run\.' "$_cf" 2>/dev/null)
 	ORM_CAPS_INIT=1
 	if [ -n "$_keep" ]; then
 		printf '%s\n' "$_keep" >"$_cf"
+		ORM_CAPS="$ORM_NL$_keep"
 	else
 		: >"$_cf"
+		ORM_CAPS=''
 	fi
 }
 
+caps_reload() {
+	ORM_CAPS="$ORM_NL$(cat "$ORM_STATE/caps" 2>/dev/null)"
+}
+
 caps_set() {
-	printf '%s=%s\n' "$1" "$(printf '%s' "$2" | tr -d '\n')" >>"$(caps_file)"
+	local _cv
+	_cv=$2
+	case "$_cv" in
+	*"$ORM_NL"*) _cv=$(printf '%s' "$_cv" | tr '\n' ' ') ;;
+	esac
+	ORM_CAPS="$ORM_CAPS$ORM_NL$1=$_cv"
+	printf '%s=%s\n' "$1" "$_cv" >>"$ORM_STATE/caps"
+}
+
+# caps_v KEY [DEFAULT] -> sets CAPS_V without a subshell (for loops)
+caps_v() {
+	local _cg
+	case "$ORM_CAPS" in
+	*"$ORM_NL$1="*)
+		_cg=${ORM_CAPS##*"$ORM_NL$1="}
+		CAPS_V=${_cg%%"$ORM_NL"*}
+		;;
+	*)
+		CAPS_V=${2:-}
+		return 1
+		;;
+	esac
 }
 
 # caps_get KEY [DEFAULT] - last value wins
 caps_get() {
 	local _cg
-	_cg=$(grep "^${1}=" "$(caps_file)" 2>/dev/null | tail -n1)
-	if [ -z "$_cg" ]; then
+	case "$ORM_CAPS" in
+	*"$ORM_NL$1="*)
+		_cg=${ORM_CAPS##*"$ORM_NL$1="}
+		printf '%s' "${_cg%%"$ORM_NL"*}"
+		;;
+	*)
 		printf '%s' "${2:-}"
 		return 1
-	fi
-	printf '%s' "${_cg#*=}"
+		;;
+	esac
 }
 
 caps_is() {
@@ -158,8 +196,9 @@ sysdet_soc() {
 	_soc='' _vendor='' _family=''
 	for _c in $_compat; do
 		case "$_c" in
-		mediatek,mt79[0-9][0-9]* | mediatek,mt76[0-9][0-9]* | mediatek,mt7622 | mediatek,mt7623*)
-			_soc=$(upper "${_c#mediatek,}") _vendor=MediaTek ;;
+		mediatek,mt79[0-9][0-9]* | mediatek,mt76[0-9][0-9]* | mediatek,mt7622 | mediatek,mt7623* | ralink,mt7620*)
+			_soc=$(upper "${_c#*,}") _vendor=MediaTek
+			_soc=${_soc%-SOC} ;;
 		qcom,ipq* | qcom,qca* | qcom,qcs*)
 			_soc=$(upper "${_c#qcom,}") _vendor=Qualcomm ;;
 		qca,ar* | qca,qca* | qca,tp9343)
@@ -178,6 +217,9 @@ sysdet_soc() {
 	MT7986*) _family="MediaTek Filogic 830" ;;
 	MT7988*) _family="MediaTek Filogic 880" ;;
 	MT7987*) _family="MediaTek Filogic" ;;
+	MT7621*) _family="MediaTek MT7621 (ramips, MIPS 1004Kc)" ;;
+	MT7628* | MT7688*) _family="MediaTek MT7628/MT7688 (ramips, MIPS 24KEc)" ;;
+	MT7620*) _family="MediaTek MT7620 (ramips)" ;;
 	IPQ807* | IPQ60* | IPQ50* | IPQ95* | IPQ53*) _family="Qualcomm IPQ (ath11k/ath12k)" ;;
 	IPQ40*) _family="Qualcomm IPQ40xx (ath10k)" ;;
 	esac
@@ -188,6 +230,8 @@ sysdet_soc() {
 		ipq40xx/*) _family="Qualcomm IPQ40xx (ath10k)" ;;
 		ath79/*) _family="Qualcomm Atheros (ath79)" ;;
 		bcm27xx/* | bcm4908/* | bcm53xx/* | bcm47xx/* | bcm63xx/*) _family="Broadcom" ;;
+		ramips/mt7621) _family="MediaTek MT7621 (ramips, MIPS 1004Kc)" ;;
+		ramips/mt76x8) _family="MediaTek MT7628/MT7688 (ramips, MIPS 24KEc)" ;;
 		ramips/*) _family="MediaTek MIPS (ramips)" ;;
 		x86/*) _family="x86" ;;
 		esac
@@ -202,8 +246,46 @@ sysdet_soc() {
 	caps_set soc.family "${_family:-unknown}"
 }
 
+# CPU cores, RAM and free flash. "low" class devices (single core MIPS
+# such as MT7628, or <= 64 MB RAM) get lighter defaults: longer daemon
+# interval, fewer backups, usteer instead of DAWN.
+sysdet_resources() {
+	local _cores _mem _class _free
+	_cores=$(grep -c '^processor' "$(orm_path /proc/cpuinfo)" 2>/dev/null)
+	is_uint "$_cores" && [ "$_cores" -gt 0 ] || _cores=1
+	_mem=$(sed -n 's/^MemTotal: *\([0-9]*\) kB/\1/p' "$(orm_path /proc/meminfo)" 2>/dev/null)
+	is_uint "$_mem" || _mem=0
+	_free=$(flash_free_kb)
+	_class=normal
+	case "$(caps_get cpu.arch) $(caps_get os.pkgarch)" in
+	mips* | *" mips"*)
+		[ "$_cores" -le 1 ] && _class=low
+		;;
+	esac
+	[ "$_mem" -gt 0 ] && [ "$_mem" -le 65536 ] && _class=low
+	caps_set cpu.cores "$_cores"
+	caps_set mem.total_kb "$_mem"
+	caps_set flash.free_kb "${_free:-unknown}"
+	caps_set device.class "$_class"
+}
+
+# Free space (KB) of the writable overlay (or / on images without one)
+flash_free_kb() {
+	local _m _f
+	for _m in /overlay /; do
+		[ -d "$(orm_path "$_m")" ] || [ -n "$ORM_SYSROOT" ] || continue
+		_f=$(df -Pk "$(orm_path "$_m")" 2>/dev/null | awk 'NR == 2 { print $4; exit }')
+		if is_uint "$_f"; then
+			printf '%s' "$_f"
+			return 0
+		fi
+	done
+	return 1
+}
+
 sysdet_all() {
 	sysdet_release
 	sysdet_pkgmgr
 	sysdet_board
+	sysdet_resources
 }

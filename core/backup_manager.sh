@@ -126,6 +126,8 @@ backup_verify() {
 # backup_restore ID - restores configuration files atomically.
 backup_restore() {
 	local _id _root _tmp _c _f _dst _mode _known _kv _svc _en
+	uci_gen_bump
+	local _id _root _tmp _c _f _dst _mode _known _kv _svc _en
 	_id=$1
 	backup_verify "$_id" || return 1
 	_root=${ORM_SYSROOT:-/}
@@ -171,14 +173,20 @@ backup_restore() {
 		case " $_known" in *" $_svc="*) continue ;; esac
 		[ -x "$(orm_path "/etc/init.d/$_svc")" ] && svc_set_enabled "$_svc" 0
 	done
+	uci_gen_bump
 	log_ok "Configuration restored from backup $_id"
 	return 0
 }
 
 backup_prune() {
-	local _keep _n _old
+	local _keep _n _old _free
 	_keep=$(roam_get global.backup_keep 10)
 	is_uint "$_keep" || _keep=10
+	# little free flash (8 MB devices): keep fewer generations
+	_free=$(flash_free_kb)
+	if is_uint "$_free" && [ "$_free" -lt 1024 ] && [ "$_keep" -gt 3 ]; then
+		_keep=3
+	fi
 	[ "$_keep" -lt 2 ] && _keep=2
 	_n=$(backup_list | wc -l)
 	[ "$_n" -le "$_keep" ] && return 0

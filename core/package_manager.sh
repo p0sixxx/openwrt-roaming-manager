@@ -95,6 +95,35 @@ pkg_preflight() {
 	return 0
 }
 
+# Approximate flash needed to install a package with its usual
+# dependencies (KB). Small (8 MB flash) MT7628/MT7621 devices often have
+# well under 1 MB free.
+pkg_size_kb() {
+	case "$1" in
+	usteer) echo 160 ;;
+	dawn) echo 512 ;;
+	iw | iw-full) echo 192 ;;
+	tcpdump*) echo 640 ;;
+	wpad* | hostapd*) echo 800 ;;
+	*) echo 256 ;;
+	esac
+}
+
+# pkg_flash_ok PKG -> 0 if enough free flash (or unknown), records reason
+pkg_flash_ok() {
+	local _need _free
+	_need=$(($(pkg_size_kb "$1") + 128))
+	_free=$(caps_get flash.free_kb)
+	is_uint "$_free" || _free=$(flash_free_kb)
+	is_uint "$_free" || return 0
+	if [ "$_free" -lt "$_need" ]; then
+		caps_set "pkg.fail.$1" "insufficient flash: ${_free} KB free, about ${_need} KB needed"
+		log_warn "Not installing $1: only ${_free} KB of flash free (about ${_need} KB needed)"
+		return 1
+	fi
+	return 0
+}
+
 pkg_update() {
 	[ "$PKG_INDEX_FRESH" = 1 ] && return 0
 	log_info "Updating package index ($(pkg_mgr))..."
@@ -172,6 +201,7 @@ pkg_install() {
 		log_info "[dry-run] would install $_pkg ($_why)"
 		return 0
 	fi
+	pkg_flash_ok "$_pkg" || return 1
 	if [ "$(caps_get pkg.preflight)" != ok ]; then
 		pkg_preflight || {
 			caps_set "pkg.fail.$_pkg" "$(caps_get pkg.preflight_reason)"

@@ -203,6 +203,7 @@ prepare() {
 }
 
 run_diagnostics() {
+	uci_cache_warm
 	report_reset
 	diag_hardware
 	diag_packages
@@ -791,7 +792,7 @@ cmd_daemon() {
 			[ "$_iter" -gt 0 ] && detect_everything
 			_last_objs=$_objs
 		fi
-		if [ "$(orm_uci -q get roamctl.global.native_steering)" = 1 ]; then
+		if [ "$(roam_get global.native_steering)" = 1 ]; then
 			native_tick
 		fi
 		if [ $((_iter % 4)) -eq 0 ] && [ "$(nr_effective_mode)" = static ]; then
@@ -806,7 +807,7 @@ cmd_daemon() {
 }
 
 cmd_agent() {
-	local _verb _g _ssid _ifs _f _md _bands _bss _s _l _k _own _id _m _d
+	local _verb _g _ssid _ifs _f _md _bands _bss _s _l _k _own _id _m _d _fr
 	ORM_QUIET=1
 	_verb=$(arg 1)
 	case "$_verb" in
@@ -863,6 +864,9 @@ cmd_agent() {
 		if orch_apply >/dev/null 2>&1; then
 			echo "result=ok"
 			echo "backup=$(caps_get run.backup)"
+			echo "backend=$(roam_get global.steering_backend_active none)"
+			_fr=$(caps_get steer.fallback_reason)
+			[ -n "$_fr" ] && echo "note=$_fr"
 		else
 			echo "result=fail"
 			if [ "$(caps_get run.rolled_back)" = 1 ]; then

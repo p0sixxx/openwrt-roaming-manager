@@ -53,7 +53,16 @@ steer_select() {
 			return 0
 		fi
 	done
+	# usteer is a small C daemon and the best fit for every device class,
+	# including MT7628/MT7621 access points
 	printf usteer
+}
+
+# DAWN keeps a larger state in RAM; warn on small devices
+steer_resource_note() {
+	if [ "$1" = dawn ] && [ "$(caps_get device.class)" = low ]; then
+		log_warn "DAWN on a low-resource device ($(caps_get mem.total_kb) KB RAM): usteer is recommended"
+	fi
 }
 
 # steer_prepare BACKEND -> installs software if needed, may fall back to
@@ -65,6 +74,7 @@ steer_prepare() {
 		printf none
 		return 0
 	}
+	steer_resource_note "$_be"
 	if ! steer_call "$_be" installed; then
 		_pk=$(steer_call "$_be" package)
 		if [ -n "$_pk" ] && pkg_install "$_pk" "steering backend $_be"; then
@@ -88,7 +98,7 @@ steer_plan() {
 		# the native backend shares the roamctl service (boot check, neighbor
 		# maintenance); it is "active" only when native steering is enabled
 		if [ "$_other" = native ]; then
-			[ "$(orm_uci -q get roamctl.global.native_steering)" = 1 ] || continue
+			[ "$(roam_get global.native_steering)" = 1 ] || continue
 		elif [ "$(caps_get "steer.$_other.running")" != 1 ] && ! svc_is_enabled "$_other"; then
 			continue
 		fi

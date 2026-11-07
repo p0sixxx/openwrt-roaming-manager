@@ -3,6 +3,7 @@
 
 diag_config() {
 	local _groups _g _ssid _md _label _ifs _bad _sec _fp _s _isec _ifp _mc _l _kf _mode
+	uci_cache_warm
 	if orm_uci show wireless >/dev/null 2>&1; then
 		report_add config "UCI wireless" PASS "/etc/config/wireless parses"
 	else

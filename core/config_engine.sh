@@ -163,6 +163,7 @@ plan_show() {
 
 # Apply plan to UCI (uncommitted), journalling original values.
 plan_apply() {
+	wl_cache_reset
 	local _pa_tmp _pa_rc _op _path _rest _old_ifs _v
 	_pa_tmp="${ORM_STATE}/plan.$$"
 	ensure_dir "$ORM_STATE"
@@ -193,6 +194,7 @@ plan_apply() {
 }
 
 cfg_commit() {
+	wl_cache_reset
 	local _c
 	for _c in $ORM_CHANGED_CONFIGS; do
 		orm_uci commit "$_c" || return 1
@@ -210,6 +212,7 @@ cfg_revert() {
 
 # Revert every option recorded in the journal to its original value.
 journal_restore_uci() {
+	wl_cache_reset
 	local _jf _jr_cfgs _type _path _val _li _c
 	_jf=$(journal_file)
 	[ -f "$_jf" ] || return 0
@@ -313,17 +316,16 @@ config global 'global'
 	option watchdog_timeout '180'
 
 EOF
+		uci_gen_bump
 	fi
 }
 
 roam_get() {
 	# roam_get SECTION.OPTION [DEFAULT]
-	orm_uci -q get "roamctl.$1" || {
-		printf '%s' "${2:-}"
-		return 1
-	}
+	uci_cached_get roamctl "${1%%.*}" "${1#*.}" "${2:-}"
 }
 
 roam_groups() {
-	orm_uci -X show roamctl 2>/dev/null | sed -n 's/^roamctl\.\([^.=]*\)=group$/\1/p'
+	uci_cache_ensure roamctl
+	printf '%s' "$ORM_RC_SHOW" | sed -n 's/^roamctl\.\([^.=]*\)=group$/\1/p'
 }

@@ -277,6 +277,7 @@ compat_detect_all() {
 
 # Full detection pipeline used by every command.
 detect_everything() {
+	uci_cache_drop
 	caps_reset
 	sysdet_all
 	pkg_detect_installed
@@ -285,4 +286,5 @@ detect_everything() {
 	compat_detect_all
 	steer_detect_backends
 	caps_set detect.time "$(now)"
+	uci_cache_warm
 }

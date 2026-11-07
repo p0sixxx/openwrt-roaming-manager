@@ -49,6 +49,7 @@ orch_managed_ifaces() {
 
 orch_detect_groups() {
 	ORCH_DETECTED_GROUPS=$(cfg_detect_groups)
+	caps_reload
 }
 
 # Build pending groups for this AP (setup / repair).
@@ -104,6 +105,7 @@ orch_pending_from_config() {
 # Turn pending groups into a UCI plan (roamctl + wireless).
 orch_plan_groups() {
 	local _pf _g _ssid _md _origin _km _k _v _r _fm _ifs _p _s
+	uci_cache_warm
 	_pf=$(groups_pending_file)
 	ORCH_GROUP_COUNT=0
 	[ -s "$_pf" ] || return 1
@@ -259,7 +261,7 @@ orch_post_commit() {
 	local _daemon
 	steer_post_apply
 	_daemon=0
-	[ "$(orm_uci -q get roamctl.global.native_steering)" = 1 ] && _daemon=1
+	[ "$(roam_get global.native_steering)" = 1 ] && _daemon=1
 	[ "$(nr_effective_mode)" = static ] && _daemon=1
 	orm_uci set "roamctl.global.daemon=$_daemon"
 	orm_uci commit roamctl
@@ -319,6 +321,7 @@ orch_apply() {
 
 	# Packages (may fall back to the native backend)
 	_be=$(steer_prepare "$ORCH_BACKEND")
+	caps_reload
 	if [ "$_be" != "$ORCH_BACKEND" ]; then
 		ORCH_BACKEND=$_be
 	elif [ -n "$ORCH_INSTALL" ] && [ "$_be" != native ]; then
@@ -349,6 +352,7 @@ orch_apply() {
 # Final summary block
 orch_summary() {
 	local _g _ftm _mds
+	uci_cache_warm
 	_st() { status_color "$1"; }
 	_feat() {
 		# enabled if at least one group enables it

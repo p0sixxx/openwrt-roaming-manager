@@ -28,6 +28,21 @@ echo "Installing OpenWrt Roaming Manager $(sed -n 's/^ORM_VERSION="\(.*\)"/\1/p'
 
 [ -f "$SRC/roamctl" ] && [ -d "$SRC/core" ] || { echo "source tree incomplete" >&2; exit 1; }
 
+# Flash check (8 MB devices such as MT7628 often have little room left).
+# The program needs about 130 KB on a compressed overlay (jffs2/ubifs);
+# require some margin for backups and state.
+NEED_KB=${ORM_INSTALL_NEED_KB:-160}
+if [ -z "$PREFIX" ]; then
+	m=/
+	[ -d /overlay ] && m=/overlay
+	free=$(df -Pk "$m" 2>/dev/null | awk 'NR == 2 { print $4 }')
+	if [ -n "$free" ] && [ "$free" -lt "$NEED_KB" ] && [ ! -d /usr/lib/roamctl ]; then
+		echo "Not enough flash: ${free} KB free on $m, about ${NEED_KB} KB needed." >&2
+		echo "Free some space (e.g. remove unused packages) and retry." >&2
+		exit 1
+	fi
+fi
+
 # fresh copy of the code; configuration and state are untouched
 rm -rf "$LIB.new"
 mkdir -p "$LIB.new"

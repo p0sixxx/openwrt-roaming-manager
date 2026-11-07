@@ -105,7 +105,7 @@ sync_ap() {
 # Staged rollout to all enabled member APs.
 # Returns number of failed APs (0 = all good).
 sync_all() {
-	local _failed _skipped _ok _order _total _i _ap _conf _crc _l _res _why
+	local _failed _skipped _ok _order _total _i _ap _conf _crc _l _res _why _rbe _note
 	_failed=0 _skipped=0 _ok=0
 	_order=$(roam_aps_enabled)
 	_total=$(printf '%s\n' "$_order" | grep -c .)
@@ -130,7 +130,12 @@ sync_all() {
 		fi
 		_res=$(sync_ap "$_ap" 2>/dev/null)
 		if printf '%s\n' "$_res" | grep -qx 'result=ok'; then
-			report_add multiap "$_ap" PASS "synchronised (backup $(printf '%s\n' "$_res" | sed -n 's/^backup=//p'))"
+			_rbe=$(printf '%s\n' "$_res" | sed -n 's/^backend=//p')
+			_note=$(printf '%s\n' "$_res" | sed -n 's/^note=//p')
+			report_add multiap "$_ap" PASS "synchronised (backup $(printf '%s\n' "$_res" | sed -n 's/^backup=//p'), steering ${_rbe:-?})"
+			if [ -n "$_note" ]; then
+				report_add multiap "$_ap steering" WARN "$_note"
+			fi
 			_ok=$((_ok + 1))
 		else
 			_why=$(printf '%s\n' "$_res" | sed -n 's/^error=//p' | head -n1)

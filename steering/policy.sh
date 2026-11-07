@@ -20,57 +20,83 @@
 #     are never offered; a 5/6 GHz target must exceed its minimum
 
 # ------------------------------------------------------- client state
-pol_state_dir() {
-	printf '%s/steer' "$ORM_STATE"
+# Per-client state lives in memory (POL_DB, newline separated
+# "<mac>.<key>=<value>" records, last value wins) and is written to
+# $ORM_STATE/steer.db once per daemon tick (pol_db_save). Lookups and
+# updates need no process at all - the daemon must stay cheap on single
+# core MIPS access points (MT7628) with many clients.
+POL_DB=''
+POL_DB_LOADED=0
+
+pol_db_file() {
+	printf '%s/steer.db' "$ORM_STATE"
 }
 
-pol_state_file() {
-	printf '%s/%s' "$(pol_state_dir)" "$(printf '%s' "$1" | tr -d ':')"
+pol_db_load() {
+	[ "$POL_DB_LOADED" = 1 ] && return 0
+	POL_DB_LOADED=1
+	POL_DB=''
+	[ -s "$ORM_STATE/steer.db" ] && POL_DB="$ORM_NL$(cat "$ORM_STATE/steer.db")"
+	return 0
+}
+
+# Compact (last value per key) and persist; drops clients not seen for 2h
+pol_db_save() {
+	pol_db_load
+	ensure_dir "$ORM_STATE"
+	printf '%s\n' "$POL_DB" | awk -v now="$(now)" '
+		/^[0-9a-f:]+\.[a-z_]+=/ {
+			k = $0; sub(/=.*/, "", k)
+			if (!(k in v)) order[++n] = k
+			v[k] = substr($0, length(k) + 2)
+			m = k; sub(/\..*/, "", m)
+			if (k == m ".seen") seen[m] = v[k] + 0
+		}
+		END {
+			for (i = 1; i <= n; i++) {
+				k = order[i]; m = k; sub(/\..*/, "", m)
+				if ((m in seen) && now - seen[m] > 7200) continue
+				print k "=" v[k]
+			}
+		}' | atomic_write "$ORM_STATE/steer.db"
+	POL_DB="$ORM_NL$(cat "$ORM_STATE/steer.db" 2>/dev/null)"
+}
+
+# pol_v MAC KEY [DEFAULT] -> sets POL_V (no subshell)
+pol_v() {
+	local _pv
+	pol_db_load
+	case "$POL_DB" in
+	*"$ORM_NL$1.$2="*)
+		_pv=${POL_DB##*"$ORM_NL$1.$2="}
+		POL_V=${_pv%%"$ORM_NL"*}
+		;;
+	*) POL_V=${3:-} ;;
+	esac
 }
 
 pol_get() {
 	# pol_get MAC KEY [DEFAULT]
-	kv_get "$(pol_state_file "$1")" "$2" "${3:-}"
+	pol_v "$@"
+	printf '%s' "$POL_V"
 }
 
 pol_set() {
-	ensure_dir "$(pol_state_dir)"
-	kv_set "$(pol_state_file "$1")" "$2" "$3"
-}
-
-# Record that a client was seen on BSS at time T; counts BSS changes.
-pol_observe() {
-	local _last _tr
-	# pol_observe MAC BSSID BAND T
-	_last=$(pol_get "$1" bss)
-	if [ -n "$_last" ] && [ "$_last" != "$2" ]; then
-		_tr="$(pol_get "$1" transitions) $4"
-		pol_set "$1" transitions "$(pol_trim_window "$_tr" "$4")"
-		pol_set "$1" low_count 0
-		pol_set "$1" attempts 0
-	fi
-	pol_set "$1" bss "$2"
-	case "$3" in
-	5g | 6g) pol_set "$1" dualband 1 ;;
-	esac
-}
-
-# Keep only timestamps inside the ping-pong window
-pol_trim_window() {
-	local _w _out _ts
-	_w=$(pol_cfg pingpong_window 600)
-	_out=''
-	for _ts in $1; do
-		[ $(($2 - _ts)) -le "$_w" ] && _out="$_out $_ts"
-	done
-	printf '%s' "${_out# }"
+	# pol_set MAC KEY VALUE (in memory; persisted by pol_db_save)
+	pol_db_load
+	POL_DB="$POL_DB$ORM_NL$1.$2=$3"
 }
 
 # Effective parameter: roamctl.steering.<key> (written by the optimizer)
+# pol_cfg_v KEY DEFAULT -> sets POL_C
+pol_cfg_v() {
+	uci_cached_v roamctl steering "$1"
+	POL_C=${UCI_V:-$2}
+}
+
 pol_cfg() {
-	local _v
-	_v=$(orm_uci -q get "roamctl.steering.$1") || _v=''
-	printf '%s' "${_v:-$2}"
+	pol_cfg_v "$1" "$2"
+	printf '%s' "$POL_C"
 }
 
 pol_band_cfg() {
@@ -78,104 +104,171 @@ pol_band_cfg() {
 	pol_cfg "${1}_$2" "$3"
 }
 
+# Keep only timestamps inside the ping-pong window -> sets POL_TR
+pol_trim_window_v() {
+	local _ts
+	pol_cfg_v pingpong_window 600
+	POL_TR=''
+	for _ts in $1; do
+		[ $(($2 - _ts)) -le "$POL_C" ] && POL_TR="$POL_TR $_ts"
+	done
+	POL_TR=${POL_TR# }
+}
+
+pol_trim_window() {
+	pol_trim_window_v "$1" "$2"
+	printf '%s' "$POL_TR"
+}
+
+# Record that a client was seen on BSS at time T; counts BSS changes.
+pol_observe() {
+	local _last
+	# pol_observe MAC BSSID BAND T
+	pol_v "$1" bss
+	_last=$POL_V
+	if [ -n "$_last" ] && [ "$_last" != "$2" ]; then
+		pol_v "$1" transitions
+		pol_trim_window_v "$POL_V $4" "$4"
+		pol_set "$1" transitions "$POL_TR"
+		pol_set "$1" low_count 0
+		pol_set "$1" attempts 0
+	fi
+	[ "$_last" = "$2" ] || pol_set "$1" bss "$2"
+	pol_set "$1" seen "$4"
+	case "$3" in
+	5g | 6g)
+		pol_v "$1" dualband 0
+		[ "$POL_V" = 1 ] || pol_set "$1" dualband 1
+		;;
+	esac
+}
+
 # ------------------------------------------------------------ decide
-# pol_decide MAC BAND RSSI BTM(0/1) CONNECTED_SECS CLIENTS_ON_BSS NOW CANDIDATES
+# pol_decide_r MAC BAND RSSI BTM(0/1) CONNECTED_SECS CLIENTS_ON_BSS NOW CANDIDATES
 # CANDIDATES: newline separated "bssid band load signal local" where
 # signal is the client's signal at that BSS if known, otherwise "-".
-# Output: "none <reason>" or "steer <reason> <bssid1> <bssid2> ..."
-pol_decide() {
-	local _mac _band _rssi _btm _conn _load _now _cands _incl _min _pref _hy _samples _cool _retry _ppmax _low _ls _tr _att _list
+# Result in POL_RESULT: "none <reason>" or "steer <reason> <bssid>..."
+# (pol_decide prints the same result; use _r in loops to keep the state)
+pol_decide_r() {
+	local _mac _band _rssi _btm _conn _load _now _cands _min _pref _hy _samples _cool _retry _ppmax _low _att _list
 	_mac=$1 _band=$2 _rssi=$3 _btm=$4 _conn=$5 _load=$6 _now=$7 _cands=$8
 
-	if list_contains "$(pol_cfg exclude_client)" "$_mac"; then
-		echo "none excluded"
+	pol_cfg_v exclude_client ''
+	if list_contains "$POL_C" "$_mac"; then
+		POL_RESULT="none excluded"
 		return 0
 	fi
-	_incl=$(pol_cfg include_client)
-	if [ -n "$_incl" ] && ! list_contains "$_incl" "$_mac"; then
-		echo "none not-included"
+	pol_cfg_v include_client ''
+	if [ -n "$POL_C" ] && ! list_contains "$POL_C" "$_mac"; then
+		POL_RESULT="none not-included"
 		return 0
 	fi
 	is_uint "${_rssi#-}" || {
-		echo "none no-signal"
+		POL_RESULT="none no-signal"
 		return 0
 	}
 
-	_min=$(pol_band_cfg rssi_min "$_band" -75)
-	_pref=$(pol_band_cfg rssi_pref "$_band" -65)
-	_hy=$(pol_band_cfg hyst "$_band" 6)
-	_samples=$(pol_cfg low_samples 3)
-	_cool=$(pol_cfg cooldown 120)
-	_retry=$(pol_cfg retry_limit 3)
-	_ppmax=$(pol_cfg pingpong_max 3)
+	pol_cfg_v "rssi_min_$_band" -75
+	_min=$POL_C
+	pol_cfg_v "rssi_pref_$_band" -65
+	_pref=$POL_C
+	pol_cfg_v "hyst_$_band" 6
+	_hy=$POL_C
+	pol_cfg_v low_samples 3
+	_samples=$POL_C
+	pol_cfg_v cooldown 120
+	_cool=$POL_C
+	pol_cfg_v retry_limit 3
+	_retry=$POL_C
+	pol_cfg_v pingpong_max 3
+	_ppmax=$POL_C
 
 	# Episode bookkeeping (signal hysteresis)
-	_low=$(pol_get "$_mac" low_count 0)
+	pol_v "$_mac" low_count 0
+	_low=$POL_V
 	if [ "$_rssi" -lt "$_min" ]; then
 		_low=$((_low + 1))
+		pol_set "$_mac" low_count "$_low"
 	elif [ "$_rssi" -ge $((_min + _hy)) ]; then
-		_low=0
-		pol_set "$_mac" attempts 0
+		if [ "$_low" != 0 ]; then
+			_low=0
+			pol_set "$_mac" low_count 0
+		fi
+		pol_v "$_mac" attempts 0
+		[ "$POL_V" = 0 ] || pol_set "$_mac" attempts 0
 	fi
-	pol_set "$_mac" low_count "$_low"
 
 	if [ "$_btm" != 1 ]; then
-		echo "none no-btm-support"
+		POL_RESULT="none no-btm-support"
 		return 0
 	fi
-	if [ "$_conn" -lt "$(pol_cfg min_assoc_time 30)" ]; then
-		echo "none settling"
+	pol_cfg_v min_assoc_time 30
+	if [ "$_conn" -lt "$POL_C" ]; then
+		POL_RESULT="none settling"
 		return 0
 	fi
-	_ls=$(pol_get "$_mac" last_steer 0)
-	if [ $((_now - _ls)) -lt "$_cool" ]; then
-		echo "none cooldown"
+	pol_v "$_mac" last_steer 0
+	if [ $((_now - POL_V)) -lt "$_cool" ]; then
+		POL_RESULT="none cooldown"
 		return 0
 	fi
-	_tr=$(pol_trim_window "$(pol_get "$_mac" transitions)" "$_now")
+	pol_v "$_mac" transitions
+	pol_trim_window_v "$POL_V" "$_now"
 	# shellcheck disable=SC2086
-	set -- $_tr
+	set -- $POL_TR
 	if [ "$#" -ge "$_ppmax" ]; then
-		echo "none ping-pong-protection"
+		POL_RESULT="none ping-pong-protection"
 		return 0
 	fi
-	_att=$(pol_get "$_mac" attempts 0)
+	pol_v "$_mac" attempts 0
+	_att=$POL_V
 
 	# 1) signal based AP/band steering
 	if [ "$_low" -ge "$_samples" ]; then
 		if [ "$_att" -ge "$_retry" ]; then
-			echo "none retry-limit"
+			POL_RESULT="none retry-limit"
 			return 0
 		fi
 		_list=$(pol_rank_candidates "$_band" "$_rssi" "$_hy" "$_cands" weak)
 		if [ -n "$_list" ]; then
-			echo "steer low-signal $_list"
+			POL_RESULT="steer low-signal $_list"
 			return 0
 		fi
-		echo "none no-better-candidate"
+		POL_RESULT="none no-better-candidate"
 		return 0
 	fi
 
 	# 2) band steering: strong 2.4 GHz client, dual band capable
-	if [ "$_band" = 2g ] && [ "$(pol_cfg band_steering 1)" = 1 ] &&
-		[ "$_rssi" -ge "$(pol_cfg band_steer_rssi_2g -60)" ] &&
-		[ "$(pol_get "$_mac" dualband 0)" = 1 ] && [ "$_att" -lt "$_retry" ]; then
-		_list=$(pol_rank_candidates "$_band" "$_rssi" "$_hy" "$_cands" band)
-		if [ -n "$_list" ]; then
-			echo "steer band-steering $_list"
-			return 0
+	if [ "$_band" = 2g ] && [ "$_att" -lt "$_retry" ]; then
+		pol_cfg_v band_steering 1
+		if [ "$POL_C" = 1 ]; then
+			pol_cfg_v band_steer_rssi_2g -60
+			pol_v "$_mac" dualband 0
+			if [ "$_rssi" -ge "$POL_C" ] && [ "$POL_V" = 1 ]; then
+				_list=$(pol_rank_candidates "$_band" "$_rssi" "$_hy" "$_cands" band)
+				if [ -n "$_list" ]; then
+					POL_RESULT="steer band-steering $_list"
+					return 0
+				fi
+			fi
 		fi
 	fi
 
 	# 3) load balancing: busy BSS, marginal signal, clearly less loaded peer
-	if [ "$_load" -gt "$(pol_cfg load_threshold 20)" ] && [ "$_rssi" -lt "$_pref" ] && [ "$_att" -lt "$_retry" ]; then
+	pol_cfg_v load_threshold 20
+	if [ "$_load" -gt "$POL_C" ] && [ "$_rssi" -lt "$_pref" ] && [ "$_att" -lt "$_retry" ]; then
 		_list=$(pol_rank_candidates "$_band" "$_rssi" "$_hy" "$_cands" load "$_load")
 		if [ -n "$_list" ]; then
-			echo "steer load-balancing $_list"
+			POL_RESULT="steer load-balancing $_list"
 			return 0
 		fi
 	fi
-	echo "none ok"
+	POL_RESULT="none ok"
+}
+
+pol_decide() {
+	pol_decide_r "$@"
+	printf '%s\n' "$POL_RESULT"
 }
 
 # Rank candidates. Prints space separated BSSIDs, best first.
@@ -216,14 +309,15 @@ pol_rank_candidates() {
 pol_record_steer() {
 	# pol_record_steer MAC NOW
 	pol_set "$1" last_steer "$2"
-	pol_set "$1" attempts $(($(pol_get "$1" attempts 0) + 1))
-	pol_set "$1" steer_total $(($(pol_get "$1" steer_total 0) + 1))
+	pol_v "$1" attempts 0
+	pol_set "$1" attempts $((POL_V + 1))
+	pol_v "$1" steer_total 0
+	pol_set "$1" steer_total $((POL_V + 1))
 }
 
-# Remove state of clients not seen for a long time (memory hygiene)
+# Old per-client state files of earlier versions; the DB itself is
+# compacted and aged by pol_db_save.
 pol_gc() {
-	local _dir
-	_dir=$(pol_state_dir)
-	[ -d "$_dir" ] || return 0
-	find "$_dir" -type f -mmin +120 -exec rm -f {} \; 2>/dev/null || true
+	rm -rf "$ORM_STATE/steer" 2>/dev/null
+	return 0
 }

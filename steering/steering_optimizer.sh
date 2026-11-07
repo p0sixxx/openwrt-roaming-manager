@@ -124,7 +124,12 @@ opt_compute() {
 	done
 	caps_set opt.pingpong_window "$(opt_default pingpong_window 600)"
 	caps_set opt.min_assoc_time "$(opt_default min_assoc_time 30)"
-	caps_set opt.interval "$(opt_default interval 15)"
+	# single core MIPS (MT7628 class): poll the native backend less often
+	if [ "$(caps_get device.class)" = low ]; then
+		caps_set opt.interval 30
+	else
+		caps_set opt.interval "$(opt_default interval 15)"
+	fi
 	caps_set opt.kick_mode "$(opt_profile_value "$_prof" kick_mode none)"
 	caps_set opt.band_steering "$(opt_profile_value "$_prof" band_steering 1)"
 	caps_set opt.usteer_aggressiveness "$(opt_profile_value "$_prof" usteer_aggressiveness 1)"

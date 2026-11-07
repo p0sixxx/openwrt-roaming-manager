@@ -3,6 +3,7 @@
 
 diag_connectivity() {
 	local _nets _g _s _n _st _ip _dhcp_local _d _init _ignore _leases _gw _lr
+	uci_cache_warm
 	# LAN bridge(s) used by roaming interfaces have an address
 	_nets=''
 	for _g in $(roam_groups); do

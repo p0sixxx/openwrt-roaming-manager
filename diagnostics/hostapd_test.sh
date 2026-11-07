@@ -3,6 +3,7 @@
 
 diag_hostapd() {
 	local _hb _n _errs
+	uci_cache_warm
 	_hb=$(caps_get hostapd.binary)
 	if [ "$_hb" = none ]; then
 		report_add hostapd "daemon" FAIL "hostapd/wpad not installed"

@@ -117,9 +117,11 @@ hw_detect_phy() {
 		_info=$(iw phy "$_phy" info 2>/dev/null)
 	fi
 	if [ -n "$_info" ]; then
-		printf '%s\n' "$_info" | hw_parse_iw_phy | while IFS='=' read -r _k _v; do
-			caps_set "phy.$_phy.$_k" "$_v"
-		done
+		while IFS='=' read -r _k _v; do
+			[ -n "$_k" ] && caps_set "phy.$_phy.$_k" "$_v"
+		done <<EOF
+$(printf '%s\n' "$_info" | hw_parse_iw_phy)
+EOF
 		caps_set "phy.$_phy.iw" 1
 	else
 		caps_set "phy.$_phy.iw" 0
@@ -135,7 +137,7 @@ hw_detect_phy() {
 hw_radio_phy() {
 	local _r _phy _if _pn _path _p _dev _idx
 	_r=$1
-	_phy=$(orm_uci -q get "wireless.$_r.phy")
+	_phy=$(wl_get "$_r" phy)
 	if [ -n "$_phy" ]; then
 		printf '%s' "$_phy"
 		return 0
@@ -151,7 +153,7 @@ hw_radio_phy() {
 		done
 	fi
 	# Match the UCI "path" option against the phy device path
-	_path=$(orm_uci -q get "wireless.$_r.path")
+	_path=$(wl_get "$_r" path)
 	if [ -n "$_path" ]; then
 		for _p in $(hw_list_phys); do
 			_dev=$(readlink -f "$(orm_path "/sys/class/ieee80211/$_p/device")" 2>/dev/null)
@@ -171,10 +173,10 @@ hw_radio_phy() {
 
 hw_band_from_uci() {
 	local _b
-	_b=$(orm_uci -q get "wireless.$1.band")
+	_b=$(wl_get "$1" band)
 	if [ -z "$_b" ]; then
 		# pre-21.02 configs: hwmode 11g/11a
-		case "$(orm_uci -q get "wireless.$1.hwmode")" in
+		case "$(wl_get "$1" hwmode)" in
 		11a) _b=5g ;;
 		11b | 11g) _b=2g ;;
 		esac
@@ -186,7 +188,8 @@ hw_detect_radios() {
 	local _radios _count _r _phy _band _up _drv _if _ch
 	ORM_WSTATUS=''
 	have_cmd ubus && ORM_WSTATUS=$(ubus call network.wireless status 2>/dev/null)
-	_radios=$(orm_uci -X show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.=]*\)=wifi-device$/\1/p')
+	wl_cache_load
+	_radios=$(printf '%s' "$ORM_WL_SHOW" | sed -n 's/^wireless\.\([^.=]*\)=wifi-device$/\1/p')
 	caps_set radio.list "$(printf '%s' "$_radios" | tr '\n' ' ' | sed 's/ $//')"
 	_count=0
 	for _r in $_radios; do
@@ -195,10 +198,10 @@ hw_detect_radios() {
 		_band=$(hw_band_from_uci "$_r")
 		caps_set "radio.$_r.phy" "${_phy:-unknown}"
 		caps_set "radio.$_r.band" "${_band:-unknown}"
-		caps_set "radio.$_r.channel" "$(orm_uci -q get "wireless.$_r.channel")"
-		caps_set "radio.$_r.htmode" "$(orm_uci -q get "wireless.$_r.htmode")"
-		caps_set "radio.$_r.country" "$(orm_uci -q get "wireless.$_r.country")"
-		caps_set "radio.$_r.disabled" "$(orm_uci -q get "wireless.$_r.disabled" || echo 0)"
+		caps_set "radio.$_r.channel" "$(wl_get "$_r" channel)"
+		caps_set "radio.$_r.htmode" "$(wl_get "$_r" htmode)"
+		caps_set "radio.$_r.country" "$(wl_get "$_r" country)"
+		caps_set "radio.$_r.disabled" "$(wl_get "$_r" disabled 0)"
 		_up=0
 		[ -n "$ORM_WSTATUS" ] && [ "$(json_get "$ORM_WSTATUS" "$_r.up")" = true ] && _up=1
 		caps_set "radio.$_r.up" "$_up"

@@ -3,6 +3,7 @@
 
 diag_steering() {
 	local _be _note _aps _nr _sig _g _s _if _j _t _c _selftest_mac _old_state _d1 _d2
+	uci_cache_warm
 	_be=$(roam_get global.steering_backend_active none)
 	if [ "$_be" = none ]; then
 		report_add steering backend "NOT TESTED" "steering disabled"
@@ -45,11 +46,12 @@ diag_steering() {
 	_selftest_mac="02:00:5e:00:00:99"
 	_old_state=$ORM_STATE
 	ORM_STATE="$ORM_STATE/selftest"
-	rm -rf "$ORM_STATE/steer"
+	POL_DB='' POL_DB_LOADED=1
 	_d1=$(pol_decide "$_selftest_mac" 2g -85 0 600 1 "$_t" "$_c")
 	_d2=$(pol_decide "$_selftest_mac" 5g -40 1 600 1 "$_t" "$_c")
 	rm -rf "$ORM_STATE"
 	ORM_STATE=$_old_state
+	POL_DB='' POL_DB_LOADED=0
 	if [ "${_d1%% *}" = none ] && [ "${_d2%% *}" = none ]; then
 		report_add steering "policy engine" PASS "no steering of non-BTM clients or clients with good signal"
 	else

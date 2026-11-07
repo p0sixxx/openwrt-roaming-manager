@@ -142,6 +142,7 @@ hv_validate_iface() {
 
 hv_validate_all() {
 	local _rc _g _s
+	uci_cache_warm
 	_rc=0
 	for _g in $(roam_groups); do
 		for _s in $(roam_get "$_g.iface"); do

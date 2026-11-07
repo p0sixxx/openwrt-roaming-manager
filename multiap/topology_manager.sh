@@ -10,7 +10,8 @@
 # The node running "roamctl multiap ..." is the controller.
 
 roam_aps() {
-	orm_uci -X show roamctl 2>/dev/null | sed -n 's/^roamctl\.\([^.=]*\)=ap$/\1/p'
+	uci_cache_ensure roamctl
+	printf '%s' "$ORM_RC_SHOW" | sed -n 's/^roamctl\.\([^.=]*\)=ap$/\1/p'
 }
 
 roam_aps_enabled() {
@@ -24,8 +25,8 @@ roam_aps_enabled() {
 roam_ap_count() {
 	local _n
 	# members learn the size of the roaming system from the controller
-	_n=$(orm_uci -q get roamctl.global.ap_count)
-	if [ "$(orm_uci -q get roamctl.global.role)" = member ] && is_uint "$_n"; then
+	_n=$(roam_get global.ap_count)
+	if [ "$(roam_get global.role)" = member ] && is_uint "$_n"; then
 		echo "$_n"
 		return
 	fi
@@ -94,7 +95,9 @@ topo_probe_ap() {
 		return 1
 	fi
 	caps_set "remote.$_ap.reachable" 1
-	printf '%s\n' "$_info" | topo_store_info "$_ap"
+	topo_store_info "$_ap" <<EOF
+$_info
+EOF
 	return 0
 }
 
