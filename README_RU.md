@@ -213,8 +213,11 @@ roamctl backup list
 ```
 
 ```bash
-roamctl rollback
+roamctl rollback   # восстанавливает только wireless/roaming-конфигурацию
 ```
+
+`roamctl rollback --full <id>` восстанавливает весь `/etc/config`
+(после этого перезагрузите устройство).
 
 ## Диагностика
 

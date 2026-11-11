@@ -301,8 +301,11 @@ roamctl backup list
 ```
 
 ```bash
-roamctl rollback                 # latest backup
+roamctl rollback                 # latest backup (wireless/roaming config only)
 ```
+
+`roamctl rollback --full <id>` restores the complete `/etc/config`
+snapshot (reboot afterwards).
 
 ## Diagnostics
 

@@ -25,6 +25,19 @@ project uses [Semantic Versioning](https://semver.org/).
   for 10 clients.
 - Random numbers use BusyBox `hexdump` (always present on OpenWrt),
   `od` only as a fallback.
+- `roamctl rollback` / `backup restore` restore only what roamctl manages
+  (wireless, roamctl, usteer, dawn, /etc/roamctl); `--full` restores all
+  of /etc/config.
+
+### Fixed (code audit)
+- The daemon rewrote `/etc/roamctl/neighbors.db` on flash every minute;
+  it is now written only when neighbor data changes, under a lock.
+- APs with a wireless uplink (client/WDS/mesh) were always rolled back:
+  the health check now waits for the gateway (30 s, 90 s with a wireless
+  uplink) and warns beforehand.
+- Daemon and CLI shared one capability file; each process now uses its
+  own file, removed on exit.
+- `/tmp/roamctl.log` is rotated at 256 KB.
 
 ## [1.0.0] - 2026-11-06
 
