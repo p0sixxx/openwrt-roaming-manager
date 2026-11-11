@@ -141,6 +141,12 @@ def main():
         with open(log_actions, "a") as f:
             f.write("wifi %s\n" % action)
 
+    # a wireless uplink (client/mesh) drops while the radio restarts
+    up = os.path.join(MOCK, "net", "uplink_drop_seconds")
+    if os.path.exists(up) and action in ("reload", "up"):
+        with open(os.path.join(MOCK, "net", "gateway_down_until"), "w") as f:
+            f.write(str(int(time.time()) + int(open(up).read().strip() or 0)) + "\n")
+
     # remove previous runtime state
     for d in os.listdir(ubus):
         if d.startswith("hostapd."):

@@ -13,7 +13,12 @@ while [ $# -gt 0 ]; do
 done
 ok=1
 [ "$target" = 127.0.0.1 ] && ok=0
-[ -f "$MOCK_DIR/net/gateway" ] && [ "$target" = "$(cat "$MOCK_DIR/net/gateway")" ] && [ ! -f "$MOCK_DIR/net/gateway_down" ] && ok=0
+if [ -f "$MOCK_DIR/net/gateway" ] && [ "$target" = "$(cat "$MOCK_DIR/net/gateway")" ] && [ ! -f "$MOCK_DIR/net/gateway_down" ]; then
+	ok=0
+	if [ -f "$MOCK_DIR/net/gateway_down_until" ] && [ "$(date +%s)" -lt "$(cat "$MOCK_DIR/net/gateway_down_until")" ]; then
+		ok=1
+	fi
+fi
 case "$target" in 1.1.1.1 | 8.8.8.8) [ -f "$MOCK_DIR/net/internet" ] && ok=0 ;; esac
 grep -qx "$target" "$MOCK_DIR/net/hosts" 2>/dev/null && ok=0
 [ "$ok" = 0 ] || { echo "PING $target: 56 data bytes"; echo "$count packets transmitted, 0 packets received, 100% packet loss"; exit 1; }
