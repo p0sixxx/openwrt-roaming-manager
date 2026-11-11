@@ -66,7 +66,8 @@ Main commands:
 
 Configuration management:
   backup [create|list|verify ID|restore ID|delete ID]
-  rollback [ID]         restore the latest (or given) backup
+  rollback [ID] [--full] restore wireless/roaming config from the latest (or
+                        given) backup; --full restores all of /etc/config
   uninstall             revert all changes made by roamctl
   mdid [show|set GROUP HEX|random GROUP|scan]
   nr [show|collect|apply]
@@ -142,6 +143,7 @@ parse_args() {
 		--raw) ORM_RAW=1 ;;
 		--apply) ORM_APPLY=1 ;;
 		--nr-only) ORM_NR_ONLY=1 ;;
+		--full) ORM_FULL_RESTORE=1 ;;
 		--) shift; break ;;
 		-*) die "Unknown option '$1' (see roamctl --help)" ;;
 		*)
@@ -195,8 +197,6 @@ prepare() {
 	ensure_dir "$ORM_STATE" 0755 || die "Cannot create $ORM_STATE"
 	if [ "${1:-}" != nolock ]; then
 		lock_acquire || exit 1
-		trap 'lock_release' EXIT
-		trap 'lock_release; exit 130' INT TERM
 	fi
 	roam_cfg_init 2>/dev/null || true
 	detect_everything
@@ -443,7 +443,7 @@ cmd_backup() {
 		_id=$(arg 2)
 		[ -n "$_id" ] || die "Usage: roamctl backup restore <id>"
 		prepare
-		confirm "Restore backup $_id and reload wireless?" || return 1
+		rollback_confirm_text "$_id" || return 1
 		rollback_now "$_id" manual
 		;;
 	delete)
@@ -463,8 +463,19 @@ cmd_rollback() {
 	[ -n "$_id" ] || _id=$(backup_latest)
 	[ -n "$_id" ] || die "No backup available"
 	log_info "Rolling back to backup $_id ($(backup_meta "$_id" date), reason: $(backup_meta "$_id" reason))"
-	confirm "Restore this backup and reload wireless?" || return 1
+	rollback_confirm_text "$_id" || return 1
 	rollback_now "$_id" manual
+}
+
+rollback_confirm_text() {
+	if [ "${ORM_FULL_RESTORE:-0}" = 1 ]; then
+		log_warn "Full restore: ALL of /etc/config (network, firewall, dhcp, ...) returns to the state of $(backup_meta "$1" date)."
+		log_warn "Only wireless is reloaded - reboot afterwards so every service uses the restored files."
+		confirm "Restore the complete configuration from backup $1?"
+	else
+		log_info "Restoring wireless, roamctl and steering configuration (other settings are kept; --full restores everything)."
+		confirm "Restore backup $1 and reload wireless?"
+	fi
 }
 
 cmd_uninstall() {
@@ -782,7 +793,7 @@ cmd_daemon() {
 	echo "$$" >"$ORM_STATE/daemon.pid"
 	ORM_SYSLOG=1
 	ORM_QUIET=1
-	trap 'rm -f "$ORM_STATE/daemon.pid"; exit 0' INT TERM
+	trap 'rm -f "$ORM_STATE/daemon.pid"; orm_cleanup; exit 0' INT TERM
 	_iter=0
 	_last_objs=''
 	detect_everything
@@ -977,7 +988,14 @@ EOF
 }
 
 # ---------------------------------------------------------------- main
+orm_cleanup() {
+	lock_release
+	caps_cleanup
+}
+
 main() {
+	trap 'orm_cleanup' EXIT
+	trap 'orm_cleanup; exit 130' INT TERM
 	parse_args "$@"
 	case "$ORM_CMD" in
 	'')

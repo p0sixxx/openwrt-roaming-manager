@@ -47,6 +47,38 @@ health_gateway_ok() {
 	ping -c 1 -W 2 "$_gw" >/dev/null 2>&1
 }
 
+# Does this AP reach the network over Wi-Fi (client/WDS/mesh uplink)?
+# A wifi reload restarts the radio and with it the uplink.
+health_wireless_uplink() {
+	local _s _m
+	for _s in $(caps_get iface.list); do
+		caps_v "iface.$_s.mode"
+		_m=$CAPS_V
+		[ "$(caps_get "iface.$_s.disabled")" = 1 ] && continue
+		case "$_m" in sta | mesh | wds | adhoc) return 0 ;; esac
+	done
+	return 1
+}
+
+# Wait for the gateway after a change: the bridge needs a moment, a
+# wireless uplink needs to reassociate (up to ORM_GW_WAIT seconds,
+# default 30, or 90 with a wireless uplink).
+health_gateway_wait() {
+	local _max _t
+	_max=${ORM_GW_WAIT:-}
+	if [ -z "$_max" ]; then
+		_max=30
+		health_wireless_uplink && _max=90
+	fi
+	_t=0
+	while ! health_gateway_ok; do
+		[ "$_t" -ge "$_max" ] && return 1
+		sleep 3
+		_t=$((_t + 3))
+	done
+	return 0
+}
+
 # Snapshot of the state before a change (stored in $ORM_STATE/baseline)
 health_baseline() {
 	local _bf
@@ -109,13 +141,9 @@ health_check() {
 			_hc_fail=1
 		}
 	done
-	if [ "$_b_gw" = 1 ] && ! health_gateway_ok; then
-		# give the bridge a moment (STP/learning) before failing
-		sleep 3
-		health_gateway_ok || {
-			echo "network: default gateway unreachable after change"
-			_hc_fail=1
-		}
+	if [ "$_b_gw" = 1 ] && ! health_gateway_wait; then
+		echo "network: default gateway unreachable after change"
+		_hc_fail=1
 	fi
 	return $_hc_fail
 }
@@ -220,6 +248,9 @@ transaction_apply() {
 		return 0
 	fi
 	health_baseline
+	if health_wireless_uplink; then
+		log_warn "This AP uses a wireless uplink: the connection drops while the radio restarts; waiting up to 90 s for it to return"
+	fi
 	_bid=${ORM_TXN_BACKUP:-}
 	if [ -z "$_bid" ]; then
 		_bid=$(backup_create "$_reason") || {

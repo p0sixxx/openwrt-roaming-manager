@@ -124,11 +124,17 @@ backup_verify() {
 }
 
 # backup_restore ID - restores configuration files atomically.
+# backup_restore ID [full]
+# Default scope: everything roamctl manages (wireless, roamctl, usteer,
+# dawn, /etc/roamctl, standalone hostapd files). Other configuration
+# changed since the backup (network, firewall, ...) is kept. "full"
+# restores the complete /etc/config snapshot (only these services'
+# configs are reloaded; a reboot is recommended afterwards).
 backup_restore() {
-	local _id _root _tmp _c _f _dst _mode _known _kv _svc _en
+	local _id _root _tmp _c _f _dst _mode _known _kv _svc _en _scope
 	uci_gen_bump
-	local _id _root _tmp _c _f _dst _mode _known _kv _svc _en
 	_id=$1
+	_scope=${2:-${ORM_FULL_RESTORE:+full}}
 	backup_verify "$_id" || return 1
 	_root=${ORM_SYSROOT:-/}
 	_tmp=$(mktemp -d "${ORM_SYSROOT}/tmp/roamctl-restore.XXXXXX" 2>/dev/null) || {
@@ -146,6 +152,13 @@ backup_restore() {
 		orm_uci revert "$_c" 2>/dev/null
 	done
 	(cd "$_tmp" && find etc -type f) | while IFS= read -r _f; do
+		if [ "$_scope" != full ]; then
+			case "$_f" in
+			etc/config/wireless | etc/config/roamctl | etc/config/usteer | etc/config/dawn | \
+				etc/roamctl/* | etc/hostapd*) ;;
+			*) continue ;;
+			esac
+		fi
 		_dst="$_root/$_f"
 		ensure_dir "$(dirname "$_dst")"
 		_mode=644

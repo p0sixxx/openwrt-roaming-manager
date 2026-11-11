@@ -113,15 +113,60 @@ nr_collect_local() {
 	printf '%s' "$_cnt"
 }
 
+# The DB lives on flash: it is only rewritten when its content changes
+# (the daemon re-collects every minute) and read-modify-write cycles of
+# the daemon and a multi-AP import are serialised with a lock.
+nr_db_lock() {
+	local _i
+	ensure_dir "$ORM_STATE"
+	_i=0
+	while ! mkdir "$ORM_STATE/nrdb.lock" 2>/dev/null; do
+		_i=$((_i + 1))
+		if [ "$_i" -ge 10 ]; then
+			# stale lock of a killed process
+			rm -rf "$ORM_STATE/nrdb.lock"
+			continue
+		fi
+		sleep 1
+	done
+}
+
+nr_db_unlock() {
+	rmdir "$ORM_STATE/nrdb.lock" 2>/dev/null
+	return 0
+}
+
+# nr_db_store CONTENT -> write only if different (caller holds the lock)
+nr_db_store() {
+	local _db _old
+	_db=$(nr_db)
+	_old=$(cat "$_db" 2>/dev/null)
+	# ignore the collection timestamp (last field): a re-collection with
+	# identical neighbor data is not a change
+	if [ -f "$_db" ] && [ "$(printf '%s\n' "$_old" | sed "s/${ORM_FS}[0-9]*\$//")" = \
+		"$(printf '%s\n' "$1" | sed "s/${ORM_FS}[0-9]*\$//")" ]; then
+		return 0
+	fi
+	ensure_dir "$ORM_ETC" 0700
+	if [ -n "$1" ]; then
+		printf '%s\n' "$1" | atomic_write "$_db" 600
+	else
+		: | atomic_write "$_db" 600
+	fi
+}
+
 # Replace all entries of HOST in the DB with stdin entries.
 nr_db_merge_host() {
-	local _db
+	local _db _in _new
 	_db=$(nr_db)
-	ensure_dir "$ORM_ETC" 0700
-	{
+	_in=$(cat)
+	nr_db_lock
+	_new=$({
 		[ -f "$_db" ] && awk -F "$ORM_FS" -v h="$1" '$2 != h' "$_db"
-		cat
-	} | sort -u | atomic_write "$_db" 600
+		[ -n "$_in" ] && printf '%s\n' "$_in"
+	} | sort -u)
+	nr_db_store "$_new"
+	nr_db_unlock
 }
 
 # Replace the whole DB (multi-AP push from controller), validating input.
@@ -139,7 +184,9 @@ nr_db_import() {
 			log_warn "Rejected invalid neighbor entry for $_b"
 		fi
 	done
-	sort -u "$_tmp" | atomic_write "$(nr_db)" 600
+	nr_db_lock
+	nr_db_store "$(sort -u "$_tmp")"
+	nr_db_unlock
 	rm -f "$_tmp"
 }
 

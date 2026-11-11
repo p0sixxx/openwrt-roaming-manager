@@ -12,8 +12,17 @@
 # subshell may have written facts, caps_reload re-reads it.
 ORM_CAPS=''
 
+# One capability file per roamctl process (CLI, daemon, agent): the
+# daemon re-detects periodically and must never truncate the file of a
+# running "setup". Subshells share the parent's ID.
+: "${ORM_CAPS_ID:=$$}"
+
 caps_file() {
-	printf '%s/caps' "$ORM_STATE"
+	printf '%s/caps.%s' "$ORM_STATE" "$ORM_CAPS_ID"
+}
+
+caps_cleanup() {
+	rm -f "$ORM_STATE/caps.$ORM_CAPS_ID"
 }
 
 # Re-detection keeps run-scoped facts (run.* - e.g. the backup taken by
@@ -21,7 +30,7 @@ caps_file() {
 caps_reset() {
 	local _cf _keep
 	ensure_dir "$ORM_STATE" 0755
-	_cf="$ORM_STATE/caps"
+	_cf="$ORM_STATE/caps.$ORM_CAPS_ID"
 	_keep=''
 	[ "${ORM_CAPS_INIT:-0}" = 1 ] && _keep=$(grep '^run\.' "$_cf" 2>/dev/null)
 	ORM_CAPS_INIT=1
@@ -35,7 +44,7 @@ caps_reset() {
 }
 
 caps_reload() {
-	ORM_CAPS="$ORM_NL$(cat "$ORM_STATE/caps" 2>/dev/null)"
+	ORM_CAPS="$ORM_NL$(cat "$ORM_STATE/caps.$ORM_CAPS_ID" 2>/dev/null)"
 }
 
 caps_set() {
@@ -45,7 +54,7 @@ caps_set() {
 	*"$ORM_NL"*) _cv=$(printf '%s' "$_cv" | tr '\n' ' ') ;;
 	esac
 	ORM_CAPS="$ORM_CAPS$ORM_NL$1=$_cv"
-	printf '%s=%s\n' "$1" "$_cv" >>"$ORM_STATE/caps"
+	printf '%s=%s\n' "$1" "$_cv" >>"$ORM_STATE/caps.$ORM_CAPS_ID"
 }
 
 # caps_v KEY [DEFAULT] -> sets CAPS_V without a subshell (for loops)

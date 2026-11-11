@@ -37,12 +37,27 @@ log_mask() {
 		-e 's/((key|psk|passphrase|password|shared_key|iv)[=:] *)[^ ]+/\1<redacted>/g'
 }
 
+# The log lives in RAM (/tmp): rotate at ORM_LOG_MAX bytes (default
+# 256 KB, one old generation kept). The size is checked every 50 lines.
+ORM_LOG_N=0
+
+_log_rotate() {
+	local _sz
+	_sz=$(wc -c <"$ORM_LOG" 2>/dev/null)
+	is_uint "$_sz" || return 0
+	[ "$_sz" -gt "${ORM_LOG_MAX:-262144}" ] && mv -f "$ORM_LOG" "$ORM_LOG.1" 2>/dev/null
+	return 0
+}
+
 _log_file() {
-	local _lf_dir
 	# _log_file LEVEL MESSAGE
 	[ -n "$ORM_LOG" ] || return 0
-	_lf_dir=$(dirname "$ORM_LOG")
-	[ -d "$_lf_dir" ] || mkdir -p "$_lf_dir" 2>/dev/null || return 0
+	if [ "$ORM_LOG_N" = 0 ]; then
+		[ -d "${ORM_LOG%/*}" ] || mkdir -p "${ORM_LOG%/*}" 2>/dev/null || return 0
+		_log_rotate
+	fi
+	ORM_LOG_N=$((ORM_LOG_N + 1))
+	[ "$ORM_LOG_N" -ge 50 ] && ORM_LOG_N=0
 	printf '%s [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)" "$1" "$2" >>"$ORM_LOG" 2>/dev/null
 	if [ "$ORM_SYSLOG" = 1 ] && command -v logger >/dev/null 2>&1; then
 		logger -t roamctl -p "daemon.$3" -- "$2" 2>/dev/null
