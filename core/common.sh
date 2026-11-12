@@ -56,6 +56,51 @@ orm_uci() {
 	return $_urc
 }
 
+# --------------------------------------------- in-memory key/value stores
+# Stores are strings of "\n<key>=<value>" records with unique keys.
+# Measured in dash and BusyBox ash on an 80 KB store: "case", "${s%%X*}"
+# and "${s##*X}" are fast; "${s#*X}" with a distant X and removing a long
+# literal prefix "${s#"$p"}" are quadratic (seconds per call). Only the
+# fast forms are used on whole stores.
+
+# mem_get STORE KEY -> sets MEM_V, returns 1 if KEY is missing
+mem_get() {
+	local _mr
+	case "$1" in
+	*"$ORM_NL$2="*) ;;
+	*) return 1 ;;
+	esac
+	_mr=${1##*"$ORM_NL$2="}
+	MEM_V=${_mr%%"$ORM_NL"*}
+	return 0
+}
+
+# mem_put STORE KEY VALUE -> sets MEM_S (existing record replaced)
+mem_put() {
+	local _mp _mr
+	case "$1" in
+	*"$ORM_NL$2="*)
+		_mp=${1%%"$ORM_NL$2="*}
+		_mr=${1##*"$ORM_NL$2="}
+		# rest after the old value: the first newline is close to the start
+		case "$_mr" in
+		*"$ORM_NL"*) _mr=$ORM_NL${_mr#*"$ORM_NL"} ;;
+		*) _mr='' ;;
+		esac
+		MEM_S="$_mp$_mr$ORM_NL$2=$3"
+		;;
+	*) MEM_S="$1$ORM_NL$2=$3" ;;
+	esac
+}
+
+# Load "key=value" lines, keeping the last value of duplicate keys
+mem_load_file() {
+	MEM_S=''
+	[ -s "$1" ] || return 0
+	MEM_S="$ORM_NL$(awk '{ k = $0; sub(/=.*/, "", k); if (!(k in v)) o[++n] = k; v[k] = $0 }
+		END { for (i = 1; i <= n; i++) print v[o[i]] }' "$1")"
+}
+
 # ------------------------------------------------------- cached uci reads
 # One "uci -X show <config>" snapshot replaces dozens of "uci get" calls
 # (each a process - expensive on MT7628/MT7621 class MIPS CPUs). The
@@ -122,12 +167,8 @@ uci_cached_v() {
 		return 1
 		;;
 	esac
-	case "$_cs" in
-	*"${ORM_NL}$1.$2.$3="*) ;;
-	*) return 1 ;;
-	esac
-	_raw=${_cs#*"${ORM_NL}$1.$2.$3="}
-	_raw=${_raw%%"$ORM_NL"*}
+	mem_get "$_cs" "$1.$2.$3" || return 1
+	_raw=$MEM_V
 	case "$_raw" in
 	*"'\\''"*"' '"* | *"' '"*"'\\''"* | [!\']* | *[!\'])
 		# escaped quotes inside a list or unexpected format: ask uci

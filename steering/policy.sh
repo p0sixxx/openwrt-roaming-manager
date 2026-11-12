@@ -36,7 +36,8 @@ pol_db_load() {
 	[ "$POL_DB_LOADED" = 1 ] && return 0
 	POL_DB_LOADED=1
 	POL_DB=''
-	[ -s "$ORM_STATE/steer.db" ] && POL_DB="$ORM_NL$(cat "$ORM_STATE/steer.db")"
+	mem_load_file "$ORM_STATE/steer.db"
+	POL_DB=$MEM_S
 	return 0
 }
 
@@ -59,20 +60,19 @@ pol_db_save() {
 				print k "=" v[k]
 			}
 		}' | atomic_write "$ORM_STATE/steer.db"
-	POL_DB="$ORM_NL$(cat "$ORM_STATE/steer.db" 2>/dev/null)"
+	mem_load_file "$ORM_STATE/steer.db"
+	POL_DB=$MEM_S
 }
 
 # pol_v MAC KEY [DEFAULT] -> sets POL_V (no subshell)
 pol_v() {
 	local _pv
 	pol_db_load
-	case "$POL_DB" in
-	*"$ORM_NL$1.$2="*)
-		_pv=${POL_DB##*"$ORM_NL$1.$2="}
-		POL_V=${_pv%%"$ORM_NL"*}
-		;;
-	*) POL_V=${3:-} ;;
-	esac
+	if mem_get "$POL_DB" "$1.$2"; then
+		POL_V=$MEM_V
+	else
+		POL_V=${3:-}
+	fi
 }
 
 pol_get() {
@@ -84,7 +84,8 @@ pol_get() {
 pol_set() {
 	# pol_set MAC KEY VALUE (in memory; persisted by pol_db_save)
 	pol_db_load
-	POL_DB="$POL_DB$ORM_NL$1.$2=$3"
+	mem_put "$POL_DB" "$1.$2" "$3"
+	POL_DB=$MEM_S
 }
 
 # Effective parameter: roamctl.steering.<key> (written by the optimizer)

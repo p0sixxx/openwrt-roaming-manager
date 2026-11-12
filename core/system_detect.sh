@@ -36,7 +36,8 @@ caps_reset() {
 	ORM_CAPS_INIT=1
 	if [ -n "$_keep" ]; then
 		printf '%s\n' "$_keep" >"$_cf"
-		ORM_CAPS="$ORM_NL$_keep"
+		mem_load_file "$_cf"
+		ORM_CAPS=$MEM_S
 	else
 		: >"$_cf"
 		ORM_CAPS=''
@@ -44,7 +45,8 @@ caps_reset() {
 }
 
 caps_reload() {
-	ORM_CAPS="$ORM_NL$(cat "$ORM_STATE/caps.$ORM_CAPS_ID" 2>/dev/null)"
+	mem_load_file "$ORM_STATE/caps.$ORM_CAPS_ID"
+	ORM_CAPS=$MEM_S
 }
 
 caps_set() {
@@ -53,38 +55,29 @@ caps_set() {
 	case "$_cv" in
 	*"$ORM_NL"*) _cv=$(printf '%s' "$_cv" | tr '\n' ' ') ;;
 	esac
-	ORM_CAPS="$ORM_CAPS$ORM_NL$1=$_cv"
+	mem_put "$ORM_CAPS" "$1" "$_cv"
+	ORM_CAPS=$MEM_S
 	printf '%s=%s\n' "$1" "$_cv" >>"$ORM_STATE/caps.$ORM_CAPS_ID"
 }
 
 # caps_v KEY [DEFAULT] -> sets CAPS_V without a subshell (for loops)
 caps_v() {
-	local _cg
-	case "$ORM_CAPS" in
-	*"$ORM_NL$1="*)
-		_cg=${ORM_CAPS##*"$ORM_NL$1="}
-		CAPS_V=${_cg%%"$ORM_NL"*}
-		;;
-	*)
-		CAPS_V=${2:-}
-		return 1
-		;;
-	esac
+	if mem_get "$ORM_CAPS" "$1"; then
+		CAPS_V=$MEM_V
+		return 0
+	fi
+	CAPS_V=${2:-}
+	return 1
 }
 
 # caps_get KEY [DEFAULT] - last value wins
 caps_get() {
-	local _cg
-	case "$ORM_CAPS" in
-	*"$ORM_NL$1="*)
-		_cg=${ORM_CAPS##*"$ORM_NL$1="}
-		printf '%s' "${_cg%%"$ORM_NL"*}"
-		;;
-	*)
-		printf '%s' "${2:-}"
-		return 1
-		;;
-	esac
+	if mem_get "$ORM_CAPS" "$1"; then
+		printf '%s' "$MEM_V"
+		return 0
+	fi
+	printf '%s' "${2:-}"
+	return 1
 }
 
 caps_is() {
