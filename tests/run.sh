@@ -38,7 +38,7 @@ for suite in $SUITES; do
 		tests=$(sed -n 's/^\(test_[A-Za-z0-9_]*\)[[:space:]]*()[[:space:]]*{.*/\1/p' "$f")
 		for t in $tests; do
 			[ -n "$FILTER" ] && ! printf '%s' "$suite/$(basename "$f" .sh)/$t" | grep -q -- "$FILTER" && continue
-			printf '%-70s ' "$suite/$(basename "$f" .sh)/$t"
+			printf '%-70s ' "$suite/$(basename "$f" .sh)/$t"; ts=$(date +%s)
 			log="${TMPDIR:-/tmp}/roamctl-test-log.$$"
 			(
 				. "$ORM_REPO/tests/lib/testlib.sh"
@@ -53,10 +53,10 @@ for suite in $SUITES; do
 				[ "$TEST_FAILS" -eq 0 ] && [ "$r" -eq 0 ]
 			) >"$log" 2>&1
 			if [ $? -eq 0 ]; then
-				echo "PASS"
+				echo "PASS ($(( $(date +%s) - ts ))s)"
 				pass=$((pass + 1))
 			else
-				echo "FAIL"
+				echo "FAIL ($(( $(date +%s) - ts ))s)"
 				grep 'ASSERTION FAILED' "$log" | cut -c1-600 | sed 's/^/    | /'
 				grep -v 'ASSERTION FAILED' "$log" | tail -n 12 | sed 's/^/    | /'
 				failn=$((failn + 1))

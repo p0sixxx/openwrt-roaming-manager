@@ -91,3 +91,15 @@ test_audit_log_rotation() {
 	[ "$sz" -lt 7000 ] || fail "log is $sz bytes (limit ~3000 + 50 lines)"
 	assert_contains "$OUT" rotated
 }
+
+# 6. "${s##*X}" lookups are quadratic in dash/ash: compat evaluation took
+#    ~2 s per interface on a 15 KB store (minutes on a MIPS router).
+test_audit_store_lookups_linear() {
+	fx_new filogic-2410
+	mod_run 'i=0; while [ $i -lt 1500 ]; do caps_set "k.$i.some.long.key.name" "value-$i-xxxxxxxxxxxxxxxx"; i=$((i + 1)); done
+	t=$(date +%s); i=0; while [ $i -lt 300 ]; do caps_v k.1499.some.long.key.name; i=$((i + 1)); done
+	echo "$CAPS_V $(( $(date +%s) - t ))"'
+	set -- $OUT
+	assert_eq value-1499-xxxxxxxxxxxxxxxx "$1"
+	[ "$2" -le 5 ] || fail "300 lookups in a 1500 entry store took $2 s"
+}
