@@ -447,11 +447,13 @@ is_safe_host() {
 }
 
 lower() {
-	printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+	# explicit sets: OpenWrt's BusyBox is built without tr character
+	# classes (FEATURE_TR_CLASSES=n) - "[:upper:]" would garble the text
+	printf '%s' "$1" | tr 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' 'abcdefghijklmnopqrstuvwxyz'
 }
 
 upper() {
-	printf '%s' "$1" | tr '[:lower:]' '[:upper:]'
+	printf '%s' "$1" | tr 'abcdefghijklmnopqrstuvwxyz' 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 }
 
 # Short non-reversible fingerprint of secret material. Used to compare

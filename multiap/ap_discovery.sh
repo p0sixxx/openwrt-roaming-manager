@@ -43,7 +43,8 @@ disc_scan() {
 			done
 		done
 	done
-	sort -u "$_out" -o "$_out" 2>/dev/null
+	# no "sort -o"/"-k": OpenWrt BusyBox is built without FEATURE_SORT_BIG
+	sort -u "$_out" >"$_out.tmp" 2>/dev/null && mv -f "$_out.tmp" "$_out"
 	[ "$_scanned" = 1 ]
 }
 

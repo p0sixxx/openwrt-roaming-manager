@@ -72,7 +72,7 @@ live_client_ip() {
 # Analyse merged samples -> transitions; prints result lines
 # "transition <t_old_last> <t_new_first> <from> <to> <sig_before> <sig_after>"
 live_analyse() {
-	sort -n -k1,1 "$1" | awk '
+	sort -n "$1" | awk '
 		$1 ~ /^[0-9]+$/ {
 			t = $1; b = $2; s = $3
 			if (cur != "" && b != cur)

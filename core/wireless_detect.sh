@@ -57,7 +57,7 @@ wl_is_special_iface() {
 	*guest* | *iot* | *gast* | *hotspot*) return 0 ;;
 	esac
 	# whole words only: "HomeNet-IoT" is special, "Patriot" is not
-	for _sp_w in $(printf '%s' "$_sp_ssid" | tr -c 'a-z0-9' ' '); do
+	for _sp_w in $(printf '%s' "$_sp_ssid" | tr -c 'abcdefghijklmnopqrstuvwxyz0123456789' ' '); do
 		case "$_sp_w" in
 		guest | guests | iot | gast | gaeste | hotspot | smart | smarthome) return 0 ;;
 		esac
