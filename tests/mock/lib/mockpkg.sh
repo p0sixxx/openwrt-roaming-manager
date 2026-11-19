@@ -8,6 +8,7 @@ online() { [ -f "$MOCK_DIR/net/internet" ] && [ -f "$MOCK_DIR/net/dns" ]; }
 avail() { grep -qx "$1" "$P/available"; }
 log() { echo "$pm $*" >>"${MOCK_LOG:-/dev/null}"; }
 install_pkg() {
+	set -- "$(basename "$1" | sed -E 's/(_|-)1\.0-r1(_[a-z0-9_]+)?\.(apk|ipk)$//')"
 	grep -qx "$1" "$P/installed" || echo "$1" >>"$P/installed"
 	"$MOCK_LIB/postinst.sh" "$1"
 }
@@ -29,12 +30,24 @@ opkg:install | apk:add)
 	for p in "$@"; do
 		case "$p" in -*) continue ;; esac
 		online || { echo "Unknown package '$p'." >&2; exit 255; }
-		grep -qx "$p" "$P/install_fail" 2>/dev/null && { echo "Collected errors: $p" >&2; exit 255; }
-		avail "$p" || { echo "Unknown package '$p'." >&2; exit 255; }
+		n=$(basename "$p" | sed -E 's/(_|-)1\.0-r1(_[a-z0-9_]+)?\.(apk|ipk)$//')
+		grep -qx "$n" "$P/install_fail" 2>/dev/null && { echo "Collected errors: $n" >&2; exit 255; }
+		case "$p" in
+		*.apk | *.ipk) [ -f "$p" ] || { echo "no such file $p" >&2; exit 255; } ;;
+		*) avail "$p" || { echo "Unknown package '$p'." >&2; exit 255; } ;;
+		esac
 		install_pkg "$p"
 	done ;;
 opkg:remove | apk:del)
-	for p in "$@"; do grep -vx "$p" "$P/installed" >"$P/i.tmp"; mv "$P/i.tmp" "$P/installed"; done ;;
+	# del_needs_force: plain removal is refused (reverse dependencies)
+	case " $* " in
+	*" --force-depends "* | *" --force-broken-world "*) ;;
+	*) [ -f "$P/del_needs_force" ] && { echo "ERROR: unable to remove: required by other packages" >&2; exit 1; } ;;
+	esac
+	for p in "$@"; do
+		case "$p" in -*) continue ;; esac
+		grep -vx "$p" "$P/installed" >"$P/i.tmp"; mv "$P/i.tmp" "$P/installed"
+	done ;;
 opkg:download) online && avail "$1" && touch "$1_1.0-r1.ipk" ;;
 apk:fetch) online && avail "$3" && touch "$2/$3-1.0-r1.apk" ;;
 *) echo "mock $pm: unsupported $cmd" >&2; exit 1 ;;

@@ -103,3 +103,29 @@ test_audit_store_lookups_linear() {
 	assert_eq value-1499-xxxxxxxxxxxxxxxx "$1"
 	[ "$2" -le 5 ] || fail "300 lookups in a 1500 entry store took $2 s"
 }
+
+# 7. SSIDs containing "iot"/"guest" as part of a word were skipped.
+test_audit_special_ssid_words() {
+	fx_new filogic-2410
+	mod_run 'for s in default_radio0 iot_radio0; do :; done
+	orm_uci set wireless.default_radio0.ssid=Patriot; orm_uci set wireless.guest_radio1.ssid=Home-Guest; orm_uci commit wireless
+	wl_is_special_iface default_radio0 && echo patriot-special || echo patriot-normal
+	wl_is_special_iface guest_radio1 && echo guest-special'
+	assert_eq 'patriot-normal
+guest-special' "$OUT"
+}
+
+# 8. A wpad swap that leaves wireless unhealthy puts the old package back.
+test_audit_wpad_swap_reverted_when_unhealthy() {
+	fx_new routerich-ax3000
+	# the full wpad "starts" but hostapd fails on every radio
+	cat >"$MOCK_DIR/pkg/postinst_fail_wifi" <<'X'
+X
+	printf '%s\n' wpad-mbedtls >"$MOCK_DIR/pkg/break_wifi_after"
+	rc_run -y setup
+	assert_ne 0 "$RC"
+	assert_contains "$ERR" "Putting wpad-basic-mbedtls back"
+	assert_contains "$(cat "$MOCK_DIR/pkg/installed")" "wpad-basic-mbedtls"
+	assert_not_contains "$(cat "$MOCK_DIR/pkg/installed")" "wpad-mbedtls
+"
+}

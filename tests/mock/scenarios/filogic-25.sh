@@ -6,5 +6,5 @@ SC_MODEL="Cudy WR3000 v1"
 SC_BOARD=cudy,wr3000-v1
 SC_COMPAT="cudy,wr3000-v1 mediatek,mt7981b mediatek,mt7981"
 SC_KERNEL=6.12.30
-SC_WPAD=wpad-basic-mbedtls
+SC_WPAD=wpad-mbedtls
 SC_BASEMAC=02:25:00:00

@@ -101,7 +101,7 @@ sc_defaults() {
 	SC_HANDLER=ucode SC_UCI_UNSUPPORTED='' SC_WNM=1 SC_RRM=1 SC_REJECT='' SC_WIFI_FAIL=0
 	SC_FEATURES="11r sae eap owe 11ax 11ac acs"
 	SC_HOSTAPD_VERSION=2.11-devel
-	SC_WPAD=wpad-basic-mbedtls
+	SC_WPAD=wpad-mbedtls
 	SC_PKGS="base-files busybox dnsmasq dropbear firewall4 iw iwinfo kmod-mt7915e libubox ubus uci"
 	SC_AVAILABLE="usteer dawn wpad-mbedtls wpad-basic-mbedtls iw-full tcpdump"
 	SC_INTERNET=1 SC_DNS=1 SC_GATEWAY=192.168.1.254 SC_LANIP=192.168.1.1
@@ -191,6 +191,10 @@ fx_build() {
 		# shellcheck disable=SC2154
 		[ "$_o" != __unset__ ] && eval "$_v=\$_o"
 	done
+	# like OpenWrt: basic/mini wpad are built without WNM (802.11v)
+	case "$SC_WPAD" in
+	*basic* | *mini*) [ -n "${FXO_SC_WNM+x}" ] || SC_WNM=0 ;;
+	esac
 	R=$ORM_SYSROOT M=$MOCK_DIR
 	mkdir -p "$R/etc/config" "$R/etc/init.d" "$R/etc/rc.d" "$R/tmp" "$R/var/run" "$R/proc/device-tree" \
 		"$R/sys/class/ieee80211" "$R/sys/class/net" "$R/sys/module/mac80211" "$R/sys/module/cfg80211" \
