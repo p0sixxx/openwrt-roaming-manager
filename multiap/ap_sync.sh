@@ -128,6 +128,20 @@ sync_all() {
 			_failed=$((_failed + 1))
 			continue
 		fi
+		case "$(caps_get "remote.$_ap.hostapd_variant")" in
+		basic | mini)
+			if [ "${ORM_UPGRADE_WPAD:-1}" != 0 ]; then
+				log_info "$_ap: replacing $(caps_get "remote.$_ap.hostapd") by the full wpad"
+				if ssh_agent "$_ap" upgrade-wpad </dev/null 2>/dev/null | grep -qx 'result=ok'; then
+					report_add multiap "$_ap wpad" PASS "full wpad installed (802.11v available)"
+				else
+					report_add multiap "$_ap wpad" FAIL "wpad replacement failed; AP restored, 802.11v unavailable"
+				fi
+			else
+				report_add multiap "$_ap wpad" WARN "$(caps_get "remote.$_ap.hostapd") kept (--keep-wpad): no 802.11v/BTM steering"
+			fi
+			;;
+		esac
 		_res=$(sync_ap "$_ap" 2>/dev/null)
 		if printf '%s\n' "$_res" | grep -qx 'result=ok'; then
 			_rbe=$(printf '%s\n' "$_res" | sed -n 's/^backend=//p')

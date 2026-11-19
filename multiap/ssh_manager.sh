@@ -110,7 +110,7 @@ ssh_agent() {
 	_ap=$1 _verb=$2
 	shift 2
 	case "$_verb" in
-	ping | info | apply | nr-own | nr-set | health | rollback | backup | diag | version | watch) ;;
+	ping | info | apply | nr-own | nr-set | health | rollback | backup | diag | version | watch | upgrade-wpad) ;;
 	*) log_error "internal: invalid agent verb $_verb"; return 255 ;;
 	esac
 	_args=''

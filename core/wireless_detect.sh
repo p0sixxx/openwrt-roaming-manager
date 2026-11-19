@@ -48,7 +48,7 @@ wl_security_family() {
 # Heuristic: is this interface a guest / IoT / isolated network that must
 # not be touched without explicit permission?
 wl_is_special_iface() {
-	local _sp_net _sp_ssid _sp_iso
+	local _sp_net _sp_ssid _sp_iso _sp_w
 	# wl_is_special_iface SECTION
 	_sp_net=$(lower "$(wl_get "$1" network)")
 	_sp_ssid=$(lower "$(wl_get "$1" ssid)")
@@ -56,9 +56,12 @@ wl_is_special_iface() {
 	case "$_sp_net" in
 	*guest* | *iot* | *gast* | *hotspot*) return 0 ;;
 	esac
-	case "$_sp_ssid" in
-	*guest* | *iot* | *gast* | *-smart* | *hotspot*) return 0 ;;
-	esac
+	# whole words only: "HomeNet-IoT" is special, "Patriot" is not
+	for _sp_w in $(printf '%s' "$_sp_ssid" | tr -c 'a-z0-9' ' '); do
+		case "$_sp_w" in
+		guest | guests | iot | gast | gaeste | hotspot | smart | smarthome) return 0 ;;
+		esac
+	done
 	[ "$_sp_iso" = 1 ] && return 0
 	return 1
 }

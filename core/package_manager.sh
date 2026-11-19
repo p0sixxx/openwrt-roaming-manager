@@ -262,52 +262,67 @@ pkg_remove() {
 # old one is removed so a failed download cannot leave the AP without
 # hostapd.
 pkg_replace_backend() {
-	local _old _new _dl
+	local _old _new _dl _f _x
 	_old=$1 _new=$2
 	pkg_wpad_family "$_new" || {
 		log_error "$_new is not a hostapd/wpad package"
 		return 1
 	}
-	log_warn "Replacing the Wi-Fi backend $_old with $_new will restart all wireless interfaces."
+	log_warn "Replacing the Wi-Fi backend $_old with $_new restarts all wireless interfaces."
 	confirm "Replace $_old with $_new?" || return 1
 	pkg_preflight || return 1
 	pkg_update || return 1
 	pkg_is_available "$_new" || {
-		log_error "$_new not available"
+		log_error "$_new not available in the configured feeds; backend unchanged"
 		return 1
 	}
 	_dl=$(mktemp -d "${ORM_SYSROOT}/tmp/roamctl-pkg.XXXXXX") || return 1
+	# 1. download first: a failed download leaves the old backend alone
+	case "$(pkg_mgr)" in
+	opkg) (cd "$_dl" && opkg download "$_new") >>"$ORM_LOG" 2>&1 ;;
+	apk) apk fetch -o "$_dl" "$_new" >>"$ORM_LOG" 2>&1 ;;
+	*) false ;;
+	esac
+	_f=''
+	for _x in "$_dl"/*.ipk "$_dl"/*.apk; do
+		[ -f "$_x" ] && _f=$_x && break
+	done
+	if [ -z "$_f" ]; then
+		rm -rf "$_dl"
+		log_error "Download of $_new failed; backend unchanged"
+		return 1
+	fi
+	# 2. remove the old variant (both ship /usr/sbin/wpad); force it if
+	#    the package manager refuses because of reverse dependencies
 	case "$(pkg_mgr)" in
 	opkg)
-		(cd "$_dl" && opkg download "$_new") >>"$ORM_LOG" 2>&1 || {
-			rm -rf "$_dl"
-			log_error "Download of $_new failed; backend unchanged"
-			return 1
-		}
-		opkg remove "$_old" >>"$ORM_LOG" 2>&1
-		if ! opkg install "$_dl"/*.ipk >>"$ORM_LOG" 2>&1; then
-			log_error "Install of $_new failed, reinstalling $_old"
-			opkg install "$_old" >>"$ORM_LOG" 2>&1
-			rm -rf "$_dl"
-			return 1
-		fi
-		;;
+		opkg remove "$_old" >>"$ORM_LOG" 2>&1 ||
+			opkg remove --force-depends "$_old" >>"$ORM_LOG" 2>&1 ;;
 	apk)
-		apk fetch -o "$_dl" "$_new" >>"$ORM_LOG" 2>&1 || {
-			rm -rf "$_dl"
-			log_error "Download of $_new failed; backend unchanged"
-			return 1
-		}
-		apk del "$_old" >>"$ORM_LOG" 2>&1
-		if ! apk add "$_dl"/*.apk >>"$ORM_LOG" 2>&1; then
-			log_error "Install of $_new failed, reinstalling $_old"
-			apk add "$_old" >>"$ORM_LOG" 2>&1
-			rm -rf "$_dl"
-			return 1
-		fi
-		;;
+		apk del "$_old" >>"$ORM_LOG" 2>&1 ||
+			apk del --force-broken-world "$_old" >>"$ORM_LOG" 2>&1 ;;
 	esac
+	if pkg_installed_list 2>/dev/null | grep -qx -- "$_old"; then
+		rm -rf "$_dl"
+		log_error "Could not remove $_old (see $ORM_LOG); backend unchanged"
+		return 1
+	fi
+	# 3. install the downloaded package; on failure put the old one back
+	case "$(pkg_mgr)" in
+	opkg) opkg install "$_f" >>"$ORM_LOG" 2>&1 ;;
+	apk) apk add "$_f" >>"$ORM_LOG" 2>&1 ;;
+	esac
+	if ! pkg_installed_list 2>/dev/null | grep -qx -- "$_new"; then
+		log_error "Install of $_new failed, reinstalling $_old"
+		case "$(pkg_mgr)" in
+		opkg) opkg install "$_old" >>"$ORM_LOG" 2>&1 ;;
+		apk) apk add "$_old" >>"$ORM_LOG" 2>&1 ;;
+		esac
+		rm -rf "$_dl"
+		return 1
+	fi
 	rm -rf "$_dl"
+	journal_add_pkg "$_new"
 	log_ok "Wi-Fi backend replaced: $_old -> $_new"
 	return 0
 }

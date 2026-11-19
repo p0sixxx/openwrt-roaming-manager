@@ -91,6 +91,92 @@ orch_pending_local() {
 	done
 }
 
+# Full variant with the same TLS library for a basic/mini wpad/hostapd
+wpad_full_variant() {
+	case "$1" in
+	wpad-basic-mbedtls | wpad-mini) printf wpad-mbedtls ;;
+	wpad-basic-wolfssl) printf wpad-wolfssl ;;
+	wpad-basic-openssl) printf wpad-openssl ;;
+	wpad-basic) printf wpad ;;
+	hostapd-basic-mbedtls | hostapd-mini) printf hostapd-mbedtls ;;
+	hostapd-basic-wolfssl) printf hostapd-wolfssl ;;
+	hostapd-basic-openssl) printf hostapd-openssl ;;
+	hostapd-basic) printf hostapd ;;
+	*) return 1 ;;
+	esac
+}
+
+# The wpad/hostapd package runs as a procd service (/etc/init.d/wpad or
+# /etc/init.d/hostapd); make sure the freshly installed one is running.
+wpad_service_restart() {
+	local _svc _init
+	[ "$ORM_DRYRUN" = 1 ] && return 0
+	for _svc in wpad hostapd; do
+		_init=$(orm_path "/etc/init.d/$_svc")
+		[ -x "$_init" ] || continue
+		"$_init" enable >/dev/null 2>&1
+		"$_init" restart >/dev/null 2>&1
+	done
+	return 0
+}
+
+# Replace the Wi-Fi backend inside a backup/health-check/rollback frame.
+# orch_upgrade_wpad OLD NEW -> 0 on success (wireless verified)
+orch_upgrade_wpad() {
+	local _old _new _bid _f
+	_old=$1 _new=$2
+	health_baseline
+	_bid=$(backup_create backend-replace) || {
+		log_error "Backup failed - backend not replaced"
+		return 1
+	}
+	ORM_YES=1 pkg_replace_backend "$_old" "$_new" || {
+		wpad_service_restart
+		return 1
+	}
+	wpad_service_restart
+	wireless_reload
+	wireless_settle "$(kv_get "$ORM_STATE/baseline" bss 0)" || true
+	_f=$(health_check)
+	if [ -n "$_f" ]; then
+		log_error "Wireless unhealthy after backend replacement: $_f"
+		log_error "Putting $_old back and restoring the configuration"
+		ORM_YES=1 pkg_replace_backend "$_new" "$_old" || log_error "Reinstalling $_old failed - install it manually"
+		wpad_service_restart
+		rollback_now "$_bid" backend-replace
+		return 1
+	fi
+	log_ok "Wi-Fi backend replaced: $_old -> $_new"
+	detect_everything
+	return 0
+}
+
+# basic/mini wpad lacks 802.11v (and mini also 802.11r/k): it is replaced
+# by the full variant with the same TLS library (wpad-basic-mbedtls ->
+# wpad-mbedtls) by default; --keep-wpad keeps the installed package.
+orch_wpad_check() {
+	local _pkg _var _new
+	_pkg=$(caps_get hostapd.package none)
+	_var=$(caps_get hostapd.variant)
+	case "$_var" in basic | mini) ;; *) return 0 ;; esac
+	_new=$(wpad_full_variant "$_pkg") || return 0
+	if [ "$_var" = mini ]; then
+		log_warn "$_pkg supports neither 802.11r nor 802.11k/v."
+	else
+		log_warn "$_pkg is built without WNM: 802.11v (BSS Transition) and usteer steering will not work; 802.11r and 802.11k do."
+	fi
+	if [ "${ORM_UPGRADE_WPAD:-1}" = 0 ]; then
+		log_info "--keep-wpad: keeping $_pkg (802.11v/steering unavailable)"
+		return 0
+	fi
+	if [ "$ORM_DRYRUN" = 1 ]; then
+		log_info "[dry-run] would remove $_pkg and install $_new"
+		return 0
+	fi
+	log_step "Replacing $_pkg with $_new (wireless restarts briefly)"
+	orch_upgrade_wpad "$_pkg" "$_new"
+}
+
 # Pending records from the stored configuration (repair / sync)
 orch_pending_from_config() {
 	local _pf _g

@@ -94,6 +94,9 @@ Options:
       --no-11k | --no-11v | --no-11r
       --ft-over-ds      use FT over the DS instead of over the air
       --ft-key-mode M   auto | local | shared
+      --keep-wpad       do not replace a basic/mini wpad (by default it is
+                        replaced by the full variant, e.g. wpad-mbedtls,
+                        needed for 802.11v/steering; backup + rollback)
       --no-color        disable colours
   -V, --version         print version
   -h, --help            this help
@@ -144,6 +147,8 @@ parse_args() {
 		--apply) ORM_APPLY=1 ;;
 		--nr-only) ORM_NR_ONLY=1 ;;
 		--full) ORM_FULL_RESTORE=1 ;;
+		--upgrade-wpad) ORM_UPGRADE_WPAD=1 ;;
+		--keep-wpad) ORM_UPGRADE_WPAD=0 ;;
 		--) shift; break ;;
 		-*) die "Unknown option '$1' (see roamctl --help)" ;;
 		*)
@@ -258,6 +263,7 @@ cmd_setup() {
 	if [ "$(caps_get hostapd.binary)" = none ]; then
 		die "No hostapd/wpad installed - wireless access point support is missing"
 	fi
+	orch_wpad_check || die "Wi-Fi backend replacement failed - nothing else was changed"
 	orch_detect_groups
 	if [ -z "$ORCH_DETECTED_GROUPS" ]; then
 		cfg_conflicts | sed 's/^/  ! /' >&2
@@ -774,19 +780,10 @@ cmd_backend() {
 	prepare
 	_old=$(caps_get hostapd.package)
 	[ "$_old" = "$_new" ] && { log_ok "$_new already installed"; return 0; }
-	health_baseline
-	_bid=$(backup_create backend-replace) || die "Backup failed"
-	pkg_replace_backend "$_old" "$_new" || return 1
-	wireless_reload
-	wireless_settle "$(kv_get "$ORM_STATE/baseline" bss 0)" || true
-	_f=$(health_check)
-	if [ -n "$_f" ]; then
-		log_error "Wireless unhealthy after backend replacement: $_f"
-		log_error "Restoring configuration; reinstall $_old manually if needed"
-		rollback_now "$_bid" backend-replace
-		return 1
-	fi
-	log_ok "Backend replaced; run 'roamctl setup' to enable newly available features"
+	log_warn "Replacing $_old with $_new restarts all wireless interfaces."
+	confirm "Replace $_old with $_new?" || return 1
+	orch_upgrade_wpad "$_old" "$_new" || return 1
+	log_info "Run 'roamctl setup' (or 'roamctl repair') to enable newly available features"
 }
 
 # ----------------------------------------------------------- background
@@ -831,7 +828,7 @@ cmd_agent() {
 		prepare nolock
 		printf 'roamctl=%s\nos_version=%s\nos_support=%s\nmodel=%s\n' "$ORM_VERSION" \
 			"$(caps_get os.version)" "$(caps_get os.support)" "$(caps_get board.model)"
-		printf 'hostapd=%s\nbackend=%s\n' "$(caps_get hostapd.package)" "$(caps_get steer.active)"
+		printf 'hostapd=%s\nhostapd_variant=%s\nbackend=%s\n' "$(caps_get hostapd.package)" "$(caps_get hostapd.variant)" "$(caps_get steer.active)"
 		orch_detect_groups
 		printf '%s\n' "$ORCH_DETECTED_GROUPS" | while IFS="$ORM_FS" read -r _g _ssid _ifs; do
 			[ -n "$_g" ] || continue
@@ -907,6 +904,17 @@ cmd_agent() {
 			nr_apply_local >/dev/null 2>&1
 		fi
 		echo "result=ok"
+		;;
+	upgrade-wpad)
+		ORM_YES=1
+		ORM_UPGRADE_WPAD=1
+		prepare
+		if orch_wpad_check >/dev/null 2>&1; then
+			echo "result=ok"
+			echo "hostapd=$(caps_get hostapd.package)"
+		else
+			echo "result=fail"
+		fi
 		;;
 	health)
 		prepare nolock

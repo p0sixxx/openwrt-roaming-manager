@@ -186,6 +186,12 @@ compat_eval_iface() {
 		if [ "$_v" = 1 ] && [ "$(caps_get uciopt.bss_transition)" = 0 ]; then
 			_v=0 _wv="netifd wireless handler does not support the 'bss_transition' option"
 		fi
+		# OpenWrt builds the basic variant without CONFIG_WNM
+		# (package/network/services/hostapd/files/hostapd-basic.config):
+		# no BSS Transition Management, so no 802.11v and no BTM steering
+		if [ "$(caps_get hostapd.variant)" = basic ] && [ "$_v" = 1 ]; then
+			_v=0 _wv="$(caps_get hostapd.package) is built without WNM (802.11v); roamctl setup replaces it with the full wpad"
+		fi
 		if [ "$(caps_get hostapd.variant)" = mini ]; then
 			[ "$_k" = 1 ] && _k=0 _wk="wpad-mini lacks 802.11k support"
 			[ "$_v" = 1 ] && _v=0 _wv="wpad-mini lacks 802.11v (WNM) support"
