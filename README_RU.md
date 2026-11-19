@@ -16,7 +16,7 @@ hostapd.
 > переходу невозможно, и переключение без потерь не гарантируется для
 > клиентов без поддержки 802.11k/v/r.
 
-[English version](README.md)
+[English version](README.md) · Пошаговая установка Routerich AX3000 + Netis NX30 V2: [docs/deploy-routerich-netis.md](docs/deploy-routerich-netis.md)
 
 ## Возможности
 

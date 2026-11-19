@@ -29,6 +29,23 @@ project uses [Semantic Versioning](https://semver.org/).
   (wireless, roamctl, usteer, dawn, /etc/roamctl); `--full` restores all
   of /etc/config.
 
+### Verified against OpenWrt 25.12 sources
+- wifi-scripts (ucode) options, defaults and hostapd config path,
+  hostapd ubus API, LuCI feature probing, usteer config keys and
+  aggressiveness levels.
+
+### Fixed (OpenWrt 25.12)
+- Option support is read from the ucode schema when present; the unused
+  legacy shell handler made roamctl write `ieee80211v`, which 25.12 does
+  not have.
+- `nasid` (R0KH-ID) is set from the BSSID in shared FT key mode
+  (WPA3/SAE), as 25.12 sets no default.
+- Corrected usteer documentation: noise floor per radio; the aggressive
+  profile (usteer aggressiveness 2) does disconnect clients.
+
+### Added
+- Deployment guide and test for Routerich AX3000 v1 + Netis NX30 V2.
+
 ### Fixed (code audit)
 - The daemon rewrote `/etc/roamctl/neighbors.db` on flash every minute;
   it is now written only when neighbor data changes, under a lock.
