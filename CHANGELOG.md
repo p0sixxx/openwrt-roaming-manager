@@ -45,6 +45,13 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 - Deployment guide and test for Routerich AX3000 v1 + Netis NX30 V2.
+- `wpad-basic-*` / `wpad-mini` are built without WNM (no 802.11v / BTM
+  steering, verified in hostapd-basic.config): `setup` and `multiap sync`
+  now remove them and install the full variant with the same TLS library
+  (`wpad-basic-mbedtls` -> `wpad-mbedtls`), downloading first, forcing
+  the removal if needed, with backup, health check and automatic
+  reinstallation of the old package on failure. `--keep-wpad` opts out.
+- Guest/IoT detection matches whole SSID words only.
 
 ### Changed
 - Capability and steering state are kept in one shell variable per key

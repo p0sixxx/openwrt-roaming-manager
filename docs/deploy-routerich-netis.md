@@ -20,7 +20,13 @@ LuCI:
 * ubus-методы hostapd (`rrm_nr_get_own`, `rrm_nr_set`,
   `bss_transition_request`, `get_clients`) и их параметры совпадают;
 * usteer сам раздаёт соседей 802.11k (`rrm_nr_set`), `aggressiveness=1`
-  означает только BTM-рекомендации без отключения клиентов.
+  означает только BTM-рекомендации без отключения клиентов;
+* **`wpad-basic-mbedtls` (стоит в образе по умолчанию) собран без WNM**
+  (`#CONFIG_WNM=y` в `hostapd-basic.config`): нет 802.11v и BTM-steering.
+  Поэтому roamctl **удаляет `wpad-basic-mbedtls` и ставит полный
+  `wpad-mbedtls`** на обеих точках (сначала скачивает новый пакет, при
+  отказе удаляет старый принудительно, при любой ошибке ставит basic
+  обратно и восстанавливает конфигурацию). Отключить: `--keep-wpad`.
 
 Сценарий «Routerich + NX30» прогнан в тестовой среде (WPA2 и WPA2/WPA3).
 
@@ -128,7 +134,8 @@ roamctl audit
 roamctl setup
 ```
 
-roamctl создаст backup, установит usteer, применит настройки,
+roamctl заменит `wpad-basic-mbedtls` на `wpad-mbedtls` (Wi-Fi пропадёт
+на несколько секунд), создаст backup, установит usteer, применит настройки,
 перезапустит Wi-Fi (клиенты переподключатся) и проверит работу. Если
 проверка не пройдёт — он сам вернёт прежнюю конфигурацию. Ожидаемый итог:
 `802.11k/802.11v/802.11r: PASS`, `Live Roaming: NOT TESTED`.
@@ -161,9 +168,19 @@ roamctl multiap check
 ```
 
 `sync` сначала обновит Routerich (usteer перейдёт из локального режима в
-сетевой), затем настроит NX30 в отдельной транзакции с собственным
-backup и откатом, установит там usteer и раздаст списки соседей.
-Ожидаемо: `PASS ap_nx30 synchronised`, `MDID and FT keys consistent`.
+сетевой), затем на NX30 заменит `wpad-basic-mbedtls` на `wpad-mbedtls`,
+настроит её в отдельной транзакции с собственным backup и откатом,
+установит там usteer и раздаст списки соседей.
+Ожидаемо: `PASS ap_nx30 wpad`, `PASS ap_nx30 synchronised`,
+`MDID and FT keys consistent`.
+
+Проверить пакет на обеих точках:
+
+```bash
+apk list --installed | grep -E '^(wpad|hostapd)'
+```
+
+Должен быть только `wpad-mbedtls-…`.
 
 ## 5. Проверка
 
