@@ -5,12 +5,10 @@
 # and kernel. Results are written to the capability store (caps_*).
 
 # ---------------------------------------------------------- capability store
-# Facts are kept in memory (ORM_CAPS, newline separated "key=value", last
-# value wins) so lookups need no extra process - important on single core
-# MIPS SoCs such as MT7628 where every fork costs milliseconds. The file
-# copy is the source of truth for subshells and other processes; after a
-# subshell may have written facts, caps_reload re-reads it.
-ORM_CAPS=''
+# Facts are kept in shell variables (vs_* store, prefix ORMC_) so lookups
+# need no extra process and no string scanning. The file copy is the
+# source of truth for subshells and other processes; after a subshell
+# may have written facts, caps_reload re-reads it.
 
 # One capability file per roamctl process (CLI, daemon, agent): the
 # daemon re-detects periodically and must never truncate the file of a
@@ -36,17 +34,14 @@ caps_reset() {
 	ORM_CAPS_INIT=1
 	if [ -n "$_keep" ]; then
 		printf '%s\n' "$_keep" >"$_cf"
-		mem_load_file "$_cf"
-		ORM_CAPS=$MEM_S
 	else
 		: >"$_cf"
-		ORM_CAPS=''
 	fi
+	vs_load ORMC_ "$_cf"
 }
 
 caps_reload() {
-	mem_load_file "$ORM_STATE/caps.$ORM_CAPS_ID"
-	ORM_CAPS=$MEM_S
+	vs_load ORMC_ "$ORM_STATE/caps.$ORM_CAPS_ID"
 }
 
 caps_set() {
@@ -55,15 +50,14 @@ caps_set() {
 	case "$_cv" in
 	*"$ORM_NL"*) _cv=$(printf '%s' "$_cv" | tr '\n' ' ') ;;
 	esac
-	mem_put "$ORM_CAPS" "$1" "$_cv"
-	ORM_CAPS=$MEM_S
+	vs_set ORMC_ "$1" "$_cv"
 	printf '%s=%s\n' "$1" "$_cv" >>"$ORM_STATE/caps.$ORM_CAPS_ID"
 }
 
 # caps_v KEY [DEFAULT] -> sets CAPS_V without a subshell (for loops)
 caps_v() {
-	if mem_get "$ORM_CAPS" "$1"; then
-		CAPS_V=$MEM_V
+	if vs_get ORMC_ "$1"; then
+		CAPS_V=$VS_V
 		return 0
 	fi
 	CAPS_V=${2:-}
@@ -72,8 +66,8 @@ caps_v() {
 
 # caps_get KEY [DEFAULT] - last value wins
 caps_get() {
-	if mem_get "$ORM_CAPS" "$1"; then
-		printf '%s' "$MEM_V"
+	if vs_get ORMC_ "$1"; then
+		printf '%s' "$VS_V"
 		return 0
 	fi
 	printf '%s' "${2:-}"

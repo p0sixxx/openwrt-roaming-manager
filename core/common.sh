@@ -93,6 +93,97 @@ mem_put() {
 	esac
 }
 
+# ---------------------------------------- variable-per-key stores (O(1))
+# Every key is kept in its own shell variable <PREFIX><sanitised key>.
+# Measured in dash and BusyBox ash, string stores cost 5-25 ms per
+# lookup at 15 KB (pattern expansions are quadratic depending on where
+# the key sits); variables cost microseconds. Variable names are built
+# only from [A-Za-z0-9_]; values never become part of evaluated code.
+# The list of names of a store is kept in <PREFIX>KEYS (newline list of
+# "name original-key").
+
+# vs_name PREFIX KEY -> VS_N
+vs_name() {
+	local _vk _vo
+	_vk=$2 _vo=''
+	while :; do
+		case "$_vk" in
+		*[!A-Za-z0-9_]*)
+			_vo="$_vo${_vk%%[!A-Za-z0-9_]*}_"
+			_vk=${_vk#*[!A-Za-z0-9_]}
+			;;
+		*)
+			_vo="$_vo$_vk"
+			break
+			;;
+		esac
+	done
+	VS_N="$1$_vo"
+}
+
+# vs_set PREFIX KEY VALUE
+vs_set() {
+	local _vx _vl
+	vs_name "$1" "$2"
+	eval "_vx=\${$VS_N+x}"
+	if [ -z "$_vx" ]; then
+		eval "_vl=\${${1}KEYS}"
+		_vl="$_vl$VS_N $2$ORM_NL"
+		eval "${1}KEYS=\$_vl"
+	fi
+	eval "$VS_N=\$3"
+}
+
+# vs_get PREFIX KEY -> VS_V, returns 1 if unset
+vs_get() {
+	local _vx
+	vs_name "$1" "$2"
+	eval "_vx=\${$VS_N+x}"
+	[ -n "$_vx" ] || {
+		VS_V=''
+		return 1
+	}
+	eval "VS_V=\$$VS_N"
+	return 0
+}
+
+# vs_clear PREFIX -> unset every variable of the store
+vs_clear() {
+	local _vl _vn _vr
+	eval "_vl=\${${1}KEYS}"
+	while read -r _vn _vr; do
+		[ -n "$_vn" ] && unset "$_vn"
+	done <<VS_EOF
+$_vl
+VS_EOF
+	eval "${1}KEYS=''"
+}
+
+# vs_dump PREFIX -> prints "key=value" lines
+vs_dump() {
+	local _vl _vn _vr _vv
+	eval "_vl=\${${1}KEYS}"
+	while read -r _vn _vr; do
+		[ -n "$_vn" ] || continue
+		eval "_vv=\${$_vn-}"
+		printf '%s=%s\n' "$_vr" "$_vv"
+	done <<VS_EOF
+$_vl
+VS_EOF
+}
+
+# vs_load PREFIX FILE -> clear and load "key=value" lines (last wins)
+vs_load() {
+	local _vl
+	vs_clear "$1"
+	[ -s "$2" ] || return 0
+	while IFS= read -r _vl; do
+		case "$_vl" in
+		*=*) vs_set "$1" "${_vl%%=*}" "${_vl#*=}" ;;
+		esac
+	done <"$2"
+}
+
 # Load "key=value" lines, keeping the last value of duplicate keys
 mem_load_file() {
 	MEM_S=''

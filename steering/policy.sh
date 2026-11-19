@@ -20,32 +20,32 @@
 #     are never offered; a 5/6 GHz target must exceed its minimum
 
 # ------------------------------------------------------- client state
-# Per-client state lives in memory (POL_DB, newline separated
-# "<mac>.<key>=<value>" records, last value wins) and is written to
-# $ORM_STATE/steer.db once per daemon tick (pol_db_save). Lookups and
-# updates need no process at all - the daemon must stay cheap on single
-# core MIPS access points (MT7628) with many clients.
-POL_DB=''
+# Per-client state lives in shell variables (vs_* store, prefix ORMP_,
+# keys "<mac>.<field>") and is written to $ORM_STATE/steer.db once per
+# daemon tick (pol_db_save). Lookups and updates need no process.
 POL_DB_LOADED=0
 
 pol_db_file() {
 	printf '%s/steer.db' "$ORM_STATE"
 }
 
+pol_db_reset() {
+	vs_clear ORMP_
+	POL_DB_LOADED=1
+}
+
 pol_db_load() {
 	[ "$POL_DB_LOADED" = 1 ] && return 0
 	POL_DB_LOADED=1
-	POL_DB=''
-	mem_load_file "$ORM_STATE/steer.db"
-	POL_DB=$MEM_S
+	vs_load ORMP_ "$ORM_STATE/steer.db"
 	return 0
 }
 
-# Compact (last value per key) and persist; drops clients not seen for 2h
+# Persist; drops clients not seen for 2 h
 pol_db_save() {
 	pol_db_load
 	ensure_dir "$ORM_STATE"
-	printf '%s\n' "$POL_DB" | awk -v now="$(now)" '
+	vs_dump ORMP_ | awk -v now="$(now)" '
 		/^[0-9a-f:]+\.[a-z_]+=/ {
 			k = $0; sub(/=.*/, "", k)
 			if (!(k in v)) order[++n] = k
@@ -60,16 +60,14 @@ pol_db_save() {
 				print k "=" v[k]
 			}
 		}' | atomic_write "$ORM_STATE/steer.db"
-	mem_load_file "$ORM_STATE/steer.db"
-	POL_DB=$MEM_S
+	vs_load ORMP_ "$ORM_STATE/steer.db"
 }
 
 # pol_v MAC KEY [DEFAULT] -> sets POL_V (no subshell)
 pol_v() {
-	local _pv
 	pol_db_load
-	if mem_get "$POL_DB" "$1.$2"; then
-		POL_V=$MEM_V
+	if vs_get ORMP_ "$1.$2"; then
+		POL_V=$VS_V
 	else
 		POL_V=${3:-}
 	fi
@@ -84,8 +82,7 @@ pol_get() {
 pol_set() {
 	# pol_set MAC KEY VALUE (in memory; persisted by pol_db_save)
 	pol_db_load
-	mem_put "$POL_DB" "$1.$2" "$3"
-	POL_DB=$MEM_S
+	vs_set ORMP_ "$1.$2" "$3"
 }
 
 # Effective parameter: roamctl.steering.<key> (written by the optimizer)

@@ -46,12 +46,12 @@ diag_steering() {
 	_selftest_mac="02:00:5e:00:00:99"
 	_old_state=$ORM_STATE
 	ORM_STATE="$ORM_STATE/selftest"
-	POL_DB='' POL_DB_LOADED=1
+	pol_db_reset
 	_d1=$(pol_decide "$_selftest_mac" 2g -85 0 600 1 "$_t" "$_c")
 	_d2=$(pol_decide "$_selftest_mac" 5g -40 1 600 1 "$_t" "$_c")
 	rm -rf "$ORM_STATE"
 	ORM_STATE=$_old_state
-	POL_DB='' POL_DB_LOADED=0
+	vs_clear ORMP_; POL_DB_LOADED=0
 	if [ "${_d1%% *}" = none ] && [ "${_d2%% *}" = none ]; then
 		report_add steering "policy engine" PASS "no steering of non-BTM clients or clients with good signal"
 	else
