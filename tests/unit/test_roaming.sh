@@ -141,7 +141,7 @@ test_compat_no_11r_in_hostapd() {
 	FXO_SC_FEATURES="sae eap" fx_new filogic-2410
 	mod_run 'detect_everything; caps_get iface.default_radio0.can_11r; echo; caps_get iface.default_radio0.why_11r; echo; caps_get iface.default_radio0.can_11k'
 	assert_contains "$OUT" "0
-installed wpad-basic-mbedtls is built without IEEE 802.11r"
+installed wpad-mbedtls is built without IEEE 802.11r"
 	assert_contains "$OUT" "
 1" "802.11k must stay available"
 }

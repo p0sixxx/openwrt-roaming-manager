@@ -142,9 +142,9 @@ test_pkgmgr_detection_opkg_apk() {
 	assert_eq opkg "$OUT"
 	fx_cleanup
 	fx_new filogic-25
-	mod_run 'caps_reset; sysdet_pkgmgr; caps_get pkg.manager; echo; pkg_installed_list | grep -x wpad-basic-mbedtls'
+	mod_run 'caps_reset; sysdet_pkgmgr; caps_get pkg.manager; echo; pkg_installed_list | grep -x wpad-mbedtls'
 	assert_eq 'apk
-wpad-basic-mbedtls' "$OUT"
+wpad-mbedtls' "$OUT"
 }
 
 test_pkg_install_idempotent_and_reasons() {
@@ -153,11 +153,11 @@ test_pkg_install_idempotent_and_reasons() {
 	pkg_install usteer test 2>/dev/null && echo installed
 	pkg_install usteer test 2>/dev/null && echo again
 	pkg_install does-not-exist test 2>/dev/null || caps_get pkg.fail.does-not-exist; echo
-	pkg_install wpad-mbedtls test 2>/dev/null || caps_get pkg.fail.wpad-mbedtls'
+	pkg_install wpad-basic-mbedtls test 2>/dev/null || caps_get pkg.fail.wpad-basic-mbedtls'
 	assert_eq 'installed
 again
 package not available in configured feeds
-would replace the active Wi-Fi backend wpad-basic-mbedtls (use '"'roamctl backend replace'"')' "$OUT"
+would replace the active Wi-Fi backend wpad-mbedtls (use '"'roamctl backend replace'"')' "$OUT"
 	assert_eq 1 "$(grep -c 'opkg install usteer' "$MOCK_LOG")" "second install must be skipped"
 }
 

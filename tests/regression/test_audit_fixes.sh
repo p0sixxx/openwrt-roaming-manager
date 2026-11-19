@@ -129,3 +129,18 @@ X
 	assert_not_contains "$(cat "$MOCK_DIR/pkg/installed")" "wpad-mbedtls
 "
 }
+
+# 9. OpenWrt's BusyBox (package/utils/busybox/Config-defaults.in) is built
+#    without tr character classes, "sort -k/-o/-t" (FEATURE_SORT_BIG),
+#    tar long options, od, stat and timeout (those four are only used with
+#    a fallback in product code).
+test_audit_openwrt_busybox_applets() {
+	files="$ORM_REPO/roamctl $ORM_REPO/core/*.sh $ORM_REPO/roaming/*.sh $ORM_REPO/steering/*.sh $ORM_REPO/multiap/*.sh $ORM_REPO/diagnostics/*.sh $ORM_REPO/install/*.sh"
+	# shellcheck disable=SC2086
+	bad=$(grep -nE "tr +(-[a-z]+ +)?['\"][^'\"]*\[:[a-z]+:\]|(^|[|;&(] *)sort( +-[a-z]+)* +-[a-z]*[kotT]" $files | grep -v ':[[:space:]]*#')
+	assert_eq "" "$bad" "BusyBox-incompatible tr/sort usage"
+	fx_new filogic-2410
+	mod_run 'lower "Guest-AA:BB Super"; echo; upper "mt7981b"'
+	assert_eq 'guest-aa:bb super
+MT7981B' "$OUT"
+}
