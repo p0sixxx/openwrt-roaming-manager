@@ -46,6 +46,11 @@ project uses [Semantic Versioning](https://semver.org/).
 ### Added
 - Deployment guide and test for Routerich AX3000 v1 + Netis NX30 V2.
 
+### Changed
+- Capability and steering state are kept in one shell variable per key
+  (sanitised names). String stores were 5-25 ms per lookup in dash/ash;
+  now ~35 µs. setup is ~10x faster.
+
 ### Fixed (code audit)
 - The daemon rewrote `/etc/roamctl/neighbors.db` on flash every minute;
   it is now written only when neighbor data changes, under a lock.
