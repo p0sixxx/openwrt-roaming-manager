@@ -232,9 +232,12 @@ EOF
 		mkdir -p "$R/usr/share/ucode/wifi" "$R/usr/share/schema"
 		_opts="ieee80211r mobility_domain ft_over_ds ft_psk_generate_local reassociation_deadline r0_key_lifetime r1_key_holder pmk_r1_push r0kh r1kh nasid ieee80211k rrm_neighbor_report rrm_beacon_report bss_transition wnm_sleep_mode wnm_sleep_mode_no_keys time_advertisement"
 		for _o in $_opts; do
-			list_has "$SC_UCI_UNSUPPORTED" "$_o" || printf '\t"%s": { "type": "string" },\n' "$_o"
+			list_has "$SC_UCI_UNSUPPORTED" "$_o" || printf '\t\t"%s": {\n\t\t\t"type": "string"\n\t\t},\n' "$_o"
 		done >"$R/usr/share/schema/wireless.wifi-iface.json"
 		printf '// mock hostapd.uc\n' >"$R/usr/share/ucode/wifi/hostapd.uc"
+		# like real images: the old shell handler is installed too
+		mkdir -p "$R/lib/netifd"
+		printf '\tjson_get_vars ieee80211v bss_transition ieee80211r\n' >"$R/lib/netifd/hostapd.sh"
 		;;
 	legacy)
 		mkdir -p "$R/lib/netifd"
