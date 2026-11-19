@@ -8,9 +8,14 @@
 # transition requests.
 #
 # Thresholds: usteer *_snr options accept either an SNR (positive, dB) or
-# a signal level (negative, dBm). An SNR value is converted with a per
-# band noise floor inside usteer (-98 dBm at 2.4 GHz, -95 dBm at 5 GHz),
-# which yields band specific signal thresholds from one setting.
+# a signal level (negative, dBm). An SNR value is converted with the noise
+# floor of each radio as reported by hostapd (-95 dBm if unknown), which
+# yields per-radio signal thresholds from one setting.
+#
+# aggressiveness (usteer policy.c): 0 no roam actions, 1 BTM request
+# without "disassociation imminent" (recommendation only), 2 BTM with
+# disassociation imminent and a kick after roam_kick_delay, 3 adds a
+# disassociation timer. roamctl uses 1 except in the aggressive profile.
 #
 # Only options reported by the running usteer ("ubus call usteer
 # get_config") are written, so unknown/renamed options of other usteer

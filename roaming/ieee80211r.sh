@@ -13,7 +13,7 @@
 
 # r_plan_iface SECTION GROUP MDID KEYMODE FTMODE
 r_plan_iface() {
-	local _s _g _md _km _fm _p _key
+	local _s _g _md _km _fm _p _key _bssid
 	_s=$1 _g=$2 _md=$3 _km=$4 _fm=${5:-air}
 	_p="wireless.$_s"
 	if [ "$(caps_get "iface.$_s.can_11r")" != 1 ]; then
@@ -43,6 +43,13 @@ r_plan_iface() {
 		}
 		plan_list "$_p.r0kh" "$(ft_r0kh_entry "$_key")"
 		plan_list "$_p.r1kh" "$(ft_r1kh_entry "$_key")"
+		# R0KH-ID must be unique per BSS: derive it from the BSSID unless
+		# the administrator configured one (OpenWrt 25.x sets no default)
+		_bssid=$(caps_get "iface.$_s.bssid")
+		if [ -n "$_bssid" ] && [ "$(caps_get uciopt.nasid)" != 0 ] &&
+			[ -z "$(caps_get "iface.$_s.uci_nasid")" ]; then
+			plan_set "$_p.nasid" "$(printf '%s' "$_bssid" | tr -d ':')"
+		fi
 		;;
 	esac
 	if [ -n "${ORM_REASSOC_DEADLINE:-}" ] && [ "$(caps_get uciopt.reassociation_deadline)" != 0 ]; then

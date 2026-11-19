@@ -630,6 +630,9 @@ cmd_multiap() {
 			log_ok "$_sec reachable: OpenWrt $(caps_get "remote.$_sec.os_version"), roamctl $(caps_get "remote.$_sec.roamctl")"
 			topo_check_ap "$_sec" | while IFS= read -r _l; do log_warn "$_l"; done
 			log_info "Run 'roamctl multiap sync' to configure it."
+		elif [ "$(ssh_exec "$_h" "${ORM_OPT_USER:-root}" "${ORM_OPT_PORT:-22}" 'echo ok' </dev/null 2>/dev/null)" = ok ]; then
+			log_warn "SSH to $_h works, but roamctl is not installed there."
+			log_info "Next: roamctl multiap install $_n   then   roamctl multiap sync"
 		else
 			log_warn "$_h is not reachable with key authentication yet."
 			log_info "Install the key: roamctl multiap copy-id $_h   (or add this key to /etc/dropbear/authorized_keys there):"

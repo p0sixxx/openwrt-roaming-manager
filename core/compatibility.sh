@@ -30,7 +30,15 @@ compat_handler_paths() {
 # compat_uci_opt OPTION -> 1 (handler knows it), 0 (handler present but
 # option unknown) or "unknown" (no handler found to inspect).
 compat_uci_opt() {
-	local _paths
+	local _paths _schema
+	# ucode based wifi-scripts (24.10+, default in 25.x) validate options
+	# against this schema; the legacy shell handler that is still
+	# installed next to it is not used and must not be consulted.
+	_schema=$(orm_path /usr/share/schema/wireless.wifi-iface.json)
+	if [ -f "$_schema" ]; then
+		if grep -q "\"$1\"[[:blank:]]*:" "$_schema" 2>/dev/null; then printf 1; else printf 0; fi
+		return 0
+	fi
 	_paths=$(compat_handler_paths)
 	if [ -z "$_paths" ]; then
 		printf unknown
