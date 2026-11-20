@@ -44,7 +44,12 @@ LuCI:
 
 ## 1. Подготовка сети
 
-1. **Соедините NX30 с Routerich кабелем: LAN ↔ LAN.** Беспроводной
+Адреса: Routerich — `192.168.73.1/24` (шлюз, DNS, DHCP), NX30 —
+`192.168.73.3/24` без DHCP (до перенастройки — `192.168.1.1` по
+умолчанию).
+
+1. **Соедините NX30 с Routerich кабелем: LAN ↔ LAN** — после
+   перенастройки NX30 (см. ниже). Беспроводной
    аплинк возможен, но не рекомендуется (при каждом изменении Wi-Fi он
    пропадает на 5–30 с).
 2. Все дальнейшие действия выполняйте с ПК, **подключённого кабелем**.
@@ -62,23 +67,38 @@ LuCI:
 
 ### Netis NX30 V2 (вторая точка)
 
-Подключите ПК к NX30 (по умолчанию 192.168.1.1, **до** подключения к
-Routerich, иначе будет два 192.168.1.1) и выполните по SSH:
+Сначала, пока ПК в сети Routerich, убедитесь, что `192.168.73.3`
+свободен: он вне пула DHCP Routerich (LuCI → Network → Interfaces → LAN
+→ DHCP Server; например, при `start=100`, `limit=150` пул —
+192.168.73.100–249) и не занят статической арендой. С ПК (Windows) адрес
+не должен отвечать и не должен быть в ARP-таблице:
+
+```bash
+ping -n 2 192.168.73.3
+```
+
+```bash
+arp -a
+```
+
+Затем подключите ПК кабелем к NX30 (по умолчанию 192.168.1.1, **до**
+подключения к Routerich — иначе в сети окажется второй DHCP-сервер) и
+выполните по SSH:
 
 В 25.12 адрес LAN — список `адрес/префикс` (`list ipaddr
 '192.168.1.1/24'`); без префикса netifd ставит маску /32 и точка теряет
 связь с сетью. Поэтому старый адрес удаляется и новый добавляется с `/24`:
 
 ```bash
-uci -q delete network.lan.ipaddr; uci -q delete network.lan.netmask; uci add_list network.lan.ipaddr='192.168.1.2/24'
+uci -q delete network.lan.ipaddr; uci -q delete network.lan.netmask; uci add_list network.lan.ipaddr='192.168.73.3/24'
 ```
 
 ```bash
-uci set network.lan.gateway='192.168.1.1'
+uci set network.lan.gateway='192.168.73.1'
 ```
 
 ```bash
-uci add_list network.lan.dns='192.168.1.1'
+uci add_list network.lan.dns='192.168.73.1'
 ```
 
 ```bash
@@ -97,17 +117,17 @@ uci commit network && uci commit dhcp
 страну**, что на Routerich, но **другие каналы**: 2,4 ГГц — 11 (если на
 Routerich 1), 5 ГГц — например 149 или 44 (не тот же, что на Routerich).
 
-Перезагрузите NX30, подключите кабелем к LAN Routerich и проверьте с
-Routerich:
+Перезагрузите NX30, подключите кабелем к LAN Routerich (WAN-порт NX30
+не используется), подключите ПК к Routerich и проверьте с Routerich:
 
 ```bash
-ping -c 3 192.168.1.2
+ping -c 3 192.168.73.3
 ```
 
 С NX30 должен быть доступен интернет (нужен для установки usteer):
 
 ```bash
-ssh root@192.168.1.2 'ping -c 2 downloads.openwrt.org'
+ssh root@192.168.73.3 'ping -c 2 downloads.openwrt.org'
 ```
 
 Время на обоих должно совпадать (NTP включён по умолчанию).
@@ -128,7 +148,7 @@ tar -xzf roamctl.tar.gz && sh openwrt-roaming-manager-claude-bold-brown-u5ufeu/i
 передайте так (из папки с распакованным архивом на ПК):
 
 ```bash
-tar -czf - . | ssh root@192.168.1.1 'mkdir -p /tmp/orm && tar -xzf - -C /tmp/orm && sh /tmp/orm/install/install.sh'
+tar -czf - . | ssh root@192.168.73.1 'mkdir -p /tmp/orm && tar -xzf - -C /tmp/orm && sh /tmp/orm/install/install.sh'
 ```
 
 ## 3. Анализ и настройка Routerich
@@ -159,13 +179,13 @@ roamctl заменит `wpad-basic-mbedtls` на `wpad-mbedtls` (Wi-Fi проп�
 ## 4. Подключение NX30
 
 ```bash
-roamctl multiap copy-id 192.168.1.2
+roamctl multiap copy-id 192.168.73.3
 ```
 
 (ssh один раз спросит пароль root NX30.)
 
 ```bash
-roamctl multiap add nx30 192.168.1.2
+roamctl multiap add nx30 192.168.73.3
 ```
 
 (Сообщение «roamctl is not installed there» здесь нормально — следующий
@@ -224,7 +244,7 @@ capabilities, или в LuCI). Запустите на Routerich и пройди
 от одной точки к другой:
 
 ```bash
-roamctl test live --client aa:bb:cc:dd:ee:ff --duration 120 --ip 192.168.1.50
+roamctl test live --client aa:bb:cc:dd:ee:ff --duration 120 --ip 192.168.73.50
 ```
 
 Хороший результат: переход `BSSID Routerich -> BSSID NX30`,
