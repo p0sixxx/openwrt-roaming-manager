@@ -38,7 +38,13 @@ test_deploy_routerich_netis_wpa2() {
 	done
 	assert_contains "$(cat "$ORM_SYSROOT"/var/run/hostapd-phy1.conf)" "bss_transition=1"
 	assert_eq 0 "$(fx_host_uci nx30 get usteer.@usteer[0].local_mode)"
-	assert_eq 1 "$(fx_host_uci nx30 get usteer.@usteer[0].aggressiveness)"
+	assert_eq "" "$(fx_host_uci nx30 -q get usteer.@usteer[0].aggressiveness)" "usteer 2025-10-04 has no aggressiveness"
+	assert_eq 0 "$(fx_host_uci nx30 get usteer.@usteer[0].roam_scan_snr)" "roam trigger off: it would kick clients"
+	assert_eq 0 "$(fx_host_uci nx30 get usteer.@usteer[0].roam_trigger_snr)"
+	assert_eq 0 "$(fx_uci get usteer.@usteer[0].roam_scan_snr)"
+	assert_eq lan "$(fx_host_uci nx30 get usteer.@usteer[0].network)"
+	assert_eq 02a400000100 "$(fx_host_uci nx30 get wireless.default_radio1.nasid)" "unique R0KH-ID also for FT-PSK"
+	assert_eq 02a300000100 "$(fx_uci get wireless.default_radio1.nasid)"
 	assert_eq 4 "$(grep -c . "$ORM_SYSROOT/etc/roamctl/neighbors.db")" "2 APs x 2 bands"
 	rc_run multiap check
 	assert_rc 0 "$RC"
@@ -85,6 +91,8 @@ test_deploy_forced_removal() {
 	rc_run -y setup
 	assert_rc 0 "$RC"
 	assert_contains "$(cat "$MOCK_LOG")" "apk del --force-broken-world wpad-basic-mbedtls"
+	assert_match "$(cat "$MOCK_LOG")" 'apk add --allow-untrusted [^ ]*/wpad-mbedtls-1\.0-r1\.apk' \
+		"local file install needs --allow-untrusted (OpenWrt signs only the index)"
 	assert_not_contains "$(installed "$MOCK_DIR")" "wpad-basic-mbedtls"
 	assert_contains "$ERR" "802.11v:       PASS"
 }
@@ -98,4 +106,16 @@ test_deploy_failed_install_restores_basic() {
 	assert_contains "$ERR" "reinstalling wpad-basic-mbedtls"
 	assert_contains "$(installed "$MOCK_DIR")" "wpad-basic-mbedtls" "old backend back"
 	assert_eq "$before" "$(cat "$ORM_SYSROOT/etc/config/wireless")" "nothing else changed"
+}
+
+test_deploy_failed_install_restores_basic_offline() {
+	fx_new routerich-ax3000
+	echo wpad-mbedtls >"$MOCK_DIR/pkg/install_fail"
+	# network lost right after the removal: the old package must come
+	# back from the file fetched before it
+	touch "$MOCK_DIR/pkg/offline_after_del"
+	rc_run -y setup
+	assert_ne 0 "$RC"
+	assert_match "$(cat "$MOCK_LOG")" 'apk add --allow-untrusted [^ ]*/old/wpad-basic-mbedtls-1\.0-r1\.apk' "restored from the local file"
+	assert_contains "$(installed "$MOCK_DIR")" "wpad-basic-mbedtls"
 }

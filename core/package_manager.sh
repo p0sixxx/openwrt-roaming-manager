@@ -257,7 +257,29 @@ pkg_remove() {
 	esac
 }
 
-# Replace the Wi-Fi backend (e.g. wpad-mini -> wpad-basic-mbedtls).
+# First package file in a download directory
+pkg_local_file() {
+	local _x
+	for _x in "$1"/*.ipk "$1"/*.apk; do
+		[ -f "$_x" ] && printf '%s' "$_x" && return 0
+	done
+	return 1
+}
+
+# Install a package file downloaded by pkg_replace_backend.
+# OpenWrt signs only the apk repository index, not the package files, so
+# apk v3 rejects a local file as UNTRUSTED unless --allow-untrusted is
+# given. The file was fetched with "apk fetch", which verifies it against
+# the hash in the signed index.
+pkg_install_file() {
+	case "$(pkg_mgr)" in
+	opkg) opkg install "$1" >>"$ORM_LOG" 2>&1 ;;
+	apk) apk add --allow-untrusted "$1" >>"$ORM_LOG" 2>&1 ;;
+	*) return 1 ;;
+	esac
+}
+
+# Replace the Wi-Fi backend (e.g. wpad-basic-mbedtls -> wpad-mbedtls).
 # Only on explicit request. The new package is downloaded *before* the
 # old one is removed so a failed download cannot leave the AP without
 # hostapd.
@@ -277,16 +299,20 @@ pkg_replace_backend() {
 		return 1
 	}
 	_dl=$(mktemp -d "${ORM_SYSROOT}/tmp/roamctl-pkg.XXXXXX") || return 1
-	# 1. download first: a failed download leaves the old backend alone
+	mkdir -p "$_dl/new" "$_dl/old" || { rm -rf "$_dl"; return 1; }
+	# 1. download first: a failed download leaves the old backend alone.
+	#    The old package is fetched too, so it can be put back without
+	#    network access if the new one fails to install.
 	case "$(pkg_mgr)" in
-	opkg) (cd "$_dl" && opkg download "$_new") >>"$ORM_LOG" 2>&1 ;;
-	apk) apk fetch -o "$_dl" "$_new" >>"$ORM_LOG" 2>&1 ;;
+	opkg)
+		(cd "$_dl/new" && opkg download "$_new") >>"$ORM_LOG" 2>&1
+		(cd "$_dl/old" && opkg download "$_old") >>"$ORM_LOG" 2>&1 ;;
+	apk)
+		apk fetch -o "$_dl/new" "$_new" >>"$ORM_LOG" 2>&1
+		apk fetch -o "$_dl/old" "$_old" >>"$ORM_LOG" 2>&1 ;;
 	*) false ;;
 	esac
-	_f=''
-	for _x in "$_dl"/*.ipk "$_dl"/*.apk; do
-		[ -f "$_x" ] && _f=$_x && break
-	done
+	_f=$(pkg_local_file "$_dl/new")
 	if [ -z "$_f" ]; then
 		rm -rf "$_dl"
 		log_error "Download of $_new failed; backend unchanged"
@@ -308,16 +334,15 @@ pkg_replace_backend() {
 		return 1
 	fi
 	# 3. install the downloaded package; on failure put the old one back
-	case "$(pkg_mgr)" in
-	opkg) opkg install "$_f" >>"$ORM_LOG" 2>&1 ;;
-	apk) apk add "$_f" >>"$ORM_LOG" 2>&1 ;;
-	esac
-	if ! pkg_installed_list 2>/dev/null | grep -qx -- "$_new"; then
+	if ! pkg_install_file "$_f" || ! pkg_installed_list 2>/dev/null | grep -qx -- "$_new"; then
 		log_error "Install of $_new failed, reinstalling $_old"
-		case "$(pkg_mgr)" in
+		_x=$(pkg_local_file "$_dl/old")
+		{ [ -n "$_x" ] && pkg_install_file "$_x"; } || case "$(pkg_mgr)" in
 		opkg) opkg install "$_old" >>"$ORM_LOG" 2>&1 ;;
 		apk) apk add "$_old" >>"$ORM_LOG" 2>&1 ;;
 		esac
+		pkg_installed_list 2>/dev/null | grep -qx -- "$_old" ||
+			log_error "Reinstalling $_old failed too: install a wpad package manually (see $ORM_LOG)"
 		rm -rf "$_dl"
 		return 1
 	fi

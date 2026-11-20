@@ -29,12 +29,23 @@ opkg:info) avail "$1" && printf 'Package: %s\nVersion: 1.0-r1\nArchitecture: %s\
 opkg:install | apk:add)
 	for p in "$@"; do
 		case "$p" in -*) continue ;; esac
-		online || { echo "Unknown package '$p'." >&2; exit 255; }
 		n=$(basename "$p" | sed -E 's/(_|-)1\.0-r1(_[a-z0-9_]+)?\.(apk|ipk)$//')
 		grep -qx "$n" "$P/install_fail" 2>/dev/null && { echo "Collected errors: $n" >&2; exit 255; }
 		case "$p" in
-		*.apk | *.ipk) [ -f "$p" ] || { echo "no such file $p" >&2; exit 255; } ;;
-		*) avail "$p" || { echo "Unknown package '$p'." >&2; exit 255; } ;;
+		*.apk | *.ipk)
+			# local files need no network; OpenWrt signs only the apk
+			# index, so apk v3 rejects a local package file unless
+			# --allow-untrusted is given
+			[ -f "$p" ] || { echo "no such file $p" >&2; exit 255; }
+			if [ "$pm" = apk ]; then
+				case " $* " in
+				*" --allow-untrusted "*) ;;
+				*) echo "ERROR: $p: UNTRUSTED signature" >&2; exit 1 ;;
+				esac
+			fi ;;
+		*)
+			online || { echo "Unknown package '$p'." >&2; exit 255; }
+			avail "$p" || { echo "Unknown package '$p'." >&2; exit 255; } ;;
 		esac
 		install_pkg "$p"
 	done ;;
@@ -47,9 +58,19 @@ opkg:remove | apk:del)
 	for p in "$@"; do
 		case "$p" in -*) continue ;; esac
 		grep -vx "$p" "$P/installed" >"$P/i.tmp"; mv "$P/i.tmp" "$P/installed"
-	done ;;
+	done
+	[ -f "$P/offline_after_del" ] && rm -f "$MOCK_DIR/net/internet"
+	;;
 opkg:download) online && avail "$1" && touch "$1_1.0-r1.ipk" ;;
-apk:fetch) online && avail "$3" && touch "$2/$3-1.0-r1.apk" ;;
+apk:fetch)
+	# apk fetch -o DIR PKG...
+	d=.
+	[ "$1" = -o ] && { d=$2; shift 2; }
+	online || exit 1
+	for p in "$@"; do
+		avail "$p" || { echo "ERROR: $p: unable to select package" >&2; exit 1; }
+		touch "$d/$p-1.0-r1.apk"
+	done ;;
 *) echo "mock $pm: unsupported $cmd" >&2; exit 1 ;;
 esac
 exit 0
