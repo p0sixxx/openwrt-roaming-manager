@@ -15,6 +15,15 @@ OpenWrt 25.12 (ucode-скрипты Wi-Fi `ap.uc` и схема
 | Netis NX30 V2 | `192.168.73.3/24` | вторая точка («тупая» AP), без DHCP |
 | Netis NX30 V2 до шага 1.4 | `192.168.1.1` | адрес по умолчанию |
 
+**Порядок: включать по одной функции и проверять.** Польза 802.11k/v и
+usteer зависит от клиентов: у части пользователей они ничего не дают или
+мешают (BTM-запросы тормозят некоторые Windows-клиенты). Поэтому:
+
+1. Минимум — только 802.11r: шаги 1 → 3.1–3.4 → 5. Хватает штатного
+   `wpad-basic-mbedtls`, шаг 2 не нужен.
+2. Если переходы между точками всё ещё плохие — добавить 802.11k/v и
+   usteer: шаги 2 → 3.5 → 4 → 5.
+
 ---
 
 ## 1. Подготовка (на каждой точке)
@@ -54,16 +63,28 @@ uci show wireless | grep -E '=wifi-iface|\.band=|\.device='
 
 В LuCI (Network → Wireless) на **обеих** точках для **обоих** радио:
 
-* одинаковые SSID и пароль;
-* шифрование **WPA2-PSK** (`psk2`) — самый совместимый вариант;
-* одинаковая страна;
-* **разные каналы**: например, Routerich — 1 и 36, NX30 — 11 и 149
-  (или 44); на 5 ГГц лучше без DFS.
+* одинаковые SSID и пароль — **один SSID на 2.4 и 5 ГГц** (usteer
+  раздаёт соседей 802.11k только точкам с тем же SSID);
+* шифрование **только WPA2-PSK** (`psk2`), см. предупреждение ниже;
+* одинаковая страна (с «driver default» радио может не включиться);
+* **разные каналы без перекрытия**: например, Routerich — 1 и 36, NX30 —
+  11 и 149; на 5 ГГц лучше без DFS;
+* ширина 5 ГГц — **80 МГц** (`HE80`), не 160: на 160 МГц каналы
+  перекрываются, а ожидание DFS может длиться до 10 минут;
+* мощность (`txpower`) — ниже максимальной, чтобы зоны покрытия точек
+  перекрывались умеренно: клиент тогда раньше уходит на ближнюю точку.
+  Подбирается по месту; сильно занижать тоже нельзя.
+
+> **WPA3 и 802.11r в 25.12.** При FT с `sae` на 25.12 часть клиентов
+> (Android, iPhone) перестаёт переходить между точками
+> ([openwrt/openwrt#22200](https://github.com/openwrt/openwrt/issues/22200));
+> исправление сделано в main, в 25.12 его может не быть. Смешанный режим
+> `sae-mixed` для роуминга тоже не рекомендуют. Пока используйте `psk2`.
 
 Проверка:
 
 ```bash
-uci show wireless | grep -E '\.ssid=|\.encryption=|\.country=|\.channel='
+uci show wireless | grep -E '\.ssid=|\.encryption=|\.country=|\.channel=|\.htmode=|\.txpower='
 ```
 
 ### 1.4 NX30 как вторая точка («тупая» AP)
@@ -133,7 +154,29 @@ ping -c 2 downloads.openwrt.org && apk update
 
 ---
 
+### 1.5 Routerich: проверить аппаратный flow offload
+
+На форуме OpenWrt сообщают, что аппаратный flow offload на главном
+роутере ломает роуминг: после перехода трафик возобновляется через
+десятки секунд. Проверка (только чтение):
+
+```bash
+uci show firewall | grep -i offload
+```
+
+Если там `flow_offloading_hw='1'` и после настройки роуминга клиенты
+подвисают при переходе — выключить (вернуть: то же с `'1'`):
+
+```bash
+uci set firewall.@defaults[0].flow_offloading_hw='0' && uci commit firewall && /etc/init.d/firewall restart
+```
+
+---
+
 ## 2. Замена wpad-basic на полный wpad-mbedtls (на каждой точке)
+
+Нужен для 802.11v и usteer (вторая часть порядка в начале гайда). Для
+одного 802.11r этот шаг пропустить.
 
 `wpad-basic-mbedtls` собран без WNM (`#CONFIG_WNM=y` в
 `hostapd-basic.config`): нет 802.11v. Нужен полный `wpad-mbedtls`.
@@ -207,9 +250,13 @@ ubus -v list hostapd.phy1-ap0 | grep -E 'bss_transition_request|rrm_nr_set'
 
 ---
 
-## 3. 802.11r / 802.11k / 802.11v (на каждой точке)
+## 3. 802.11r, затем 802.11k / 802.11v (на каждой точке)
 
 ### 3.1 Один раз придумать Mobility Domain
+
+Без явного MD 25.12 вычисляет его из SSID — при одинаковом SSID он и так
+совпадёт на обеих точках. Явный MD надёжнее (не зависит от версии
+OpenWrt на точках) и удобнее в логах.
 
 Выполнить **один раз** (на любой точке), запомнить результат — 4
 hex-символа, например `a7c2`:
@@ -231,8 +278,6 @@ for i in default_radio0 default_radio1; do
   uci set wireless.$i.ft_over_ds='0'
   uci set wireless.$i.ft_psk_generate_local='1'
   uci set wireless.$i.nasid="$AP-${i#default_}"
-  uci set wireless.$i.ieee80211k='1'
-  uci set wireless.$i.bss_transition='1'
 done
 uci commit wireless
 wifi reload
@@ -251,8 +296,6 @@ for i in default_radio0 default_radio1; do
   uci set wireless.$i.ft_over_ds='0'
   uci set wireless.$i.ft_psk_generate_local='1'
   uci set wireless.$i.nasid="$AP-${i#default_}"
-  uci set wireless.$i.ieee80211k='1'
-  uci set wireless.$i.bss_transition='1'
 done
 uci commit wireless
 wifi reload
@@ -267,18 +310,18 @@ wifi reload
 | `ft_over_ds=0` | FT over the Air — лучшая совместимость с клиентами |
 | `ft_psk_generate_local=1` | ключи FT выводятся из пароля локально, обмен ключами между точками не нужен |
 | `nasid` | уникальный идентификатор каждого BSS (R0KH-ID). Необязателен: без него 25.12 берёт BSSID; явное имя удобнее в логах |
-| `ieee80211k=1` | 802.11k: neighbor и beacon reports |
-| `bss_transition=1` | 802.11v BSS Transition Management (только с полным wpad) |
+| `ieee80211k=1` (шаг 3.5) | 802.11k: neighbor и beacon reports |
+| `bss_transition=1` (шаг 3.5) | 802.11v BSS Transition Management (только с полным wpad) |
 
-> Если выбрали WPA2/WPA3 (`sae-mixed`): вместо
-> `ft_psk_generate_local='1'` поставьте `'0'` — OpenWrt сам выведет общий
-> ключ R0KH/R1KH из MD и пароля (одинаковый на обеих точках).
+`reassociation_deadline` задавать не нужно: в 25.12 по умолчанию уже
+20000 (старый совет с форума). `ieee80211w` для `psk2` не трогать —
+`ieee80211w='2'` отключит клиентов без 802.11w.
 
 ### 3.4 Проверить, что hostapd это принял
 
-На каждой точке. Должны быть `FT-PSK` в `wpa_key_mgmt`, ваш
-`mobility_domain`, `rrm_neighbor_report=1`, `bss_transition=1`.
-Пароли эта команда не показывает:
+На каждой точке. Должны быть `FT-PSK` в `wpa_key_mgmt` и ваш
+`mobility_domain`; после шага 3.5 ещё `rrm_neighbor_report=1` и
+`bss_transition=1`. Пароли эта команда не показывает:
 
 ```bash
 grep -hE '^(interface|bss|wpa_key_mgmt|mobility_domain|ft_over_ds|ft_psk_generate_local|nas_identifier|rrm_neighbor_report|rrm_beacon_report|bss_transition)=' /var/run/hostapd-phy*.conf
@@ -296,12 +339,31 @@ ubus list 'hostapd.*'
 logread | grep -iE 'hostapd|wifi' | tail -n 40
 ```
 
+### 3.5 Добавить 802.11k / 802.11v (после шага 2)
+
+Только если после проверки одного 802.11r (шаг 5) переходы плохие. На
+**обеих** точках:
+
+```bash
+for i in default_radio0 default_radio1; do
+  uci set wireless.$i.ieee80211k='1'
+  uci set wireless.$i.bss_transition='1'
+done
+uci commit wireless
+wifi reload
+```
+
+Затем повторить проверку 3.4 и перейти к шагу 4.
+
 ---
 
 ## 4. usteer — steering и раздача соседей 802.11k (на каждой точке)
 
 Без usteer точки не знают BSS друг друга, и списки соседей 802.11k
-останутся пустыми. Установка:
+останутся пустыми. usteer из 25.12 (проверено по исходникам) сам
+заполняет их через `rrm_nr_set` — но только BSS с тем же SSID, до 8
+соседей; поэтому SSID на 2.4 и 5 ГГц должен быть один (шаг 1.3).
+Установка:
 
 ```bash
 apk add usteer
@@ -343,7 +405,16 @@ ubus call hostapd.phy1-ap0 rrm_nr_list
 ```
 
 usteer обменивается данными по UDP 16720 внутри LAN — по кабелю LAN↔LAN
-это работает без настройки firewall.
+(в том числе через промежуточный роутер-свитч) это работает без
+настройки firewall.
+
+Если с usteer стало хуже (задержки у Windows-клиентов, в логе
+`BSS-TM-RESP ... status_code=7`) — сначала выключить 802.11v
+(`bss_transition='0'` на обеих точках), а если не помогло — usteer:
+
+```bash
+/etc/init.d/usteer disable && /etc/init.d/usteer stop
+```
 
 ---
 
@@ -352,15 +423,34 @@ usteer обменивается данными по UDP 16720 внутри LAN �
 На Routerich и на NX30 в двух окнах SSH:
 
 ```bash
-logread -f | grep -iE 'associated|handshake|FT'
+logread -f | grep -iE 'associated|handshake|auth_alg|FT'
 ```
 
 Пройдите с телефоном от одной точки к другой:
 
 * на новой точке появится `associated`;
-* **без** `pairwise key handshake completed` — FT сработал (быстрый роуминг);
-* с `pairwise key handshake completed` — телефон переподключился без FT:
-  связь работает, но переход медленнее.
+* `AP-STA-CONNECTED <MAC> auth_alg=ft` и **нет**
+  `pairwise key handshake completed` — FT сработал (быстрый роуминг);
+* `auth_alg=open` и `pairwise key handshake completed` — телефон
+  переподключился без FT: связь работает, но переход медленнее. Часть
+  клиентов (особенно стационарные и старые) FT не использует вообще.
+
+`nl80211: kernel reports: key addition failed` при переходе на MediaTek
+безвреден: так бывает при возврате на радио, где ключ клиента уже есть.
+
+### 5.1 Если клиенты зависают после перехода
+
+* Клиента после неудачного перехода не пускает на вторую точку
+  несколько минут — проверить, что между точками нет проблемного
+  свитча: на форуме OpenWrt причиной был неуправляемый свитч. Если NX30
+  подключён через ещё один роутер (например, Keenetic как свитч), для
+  проверки подключить NX30 к Routerich напрямую. Промежуточный роутер
+  должен соединять точки LAN-портами одного моста, без DHCP и RA.
+* Переход есть (`auth_alg=ft`), но трафик возобновляется через десятки
+  секунд — проверить flow offload на Routerich (шаг 1.5).
+* В логе `FT(RRB): Failed to decrypt` — точки обмениваются ключами FT и
+  они не совпадают; с `ft_psk_generate_local='1'` (шаг 3) обмен не нужен,
+  проверьте эту опцию в `/var/run/hostapd-phy*.conf`.
 
 ---
 
