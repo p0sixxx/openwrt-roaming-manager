@@ -43,15 +43,17 @@ r_plan_iface() {
 		}
 		plan_list "$_p.r0kh" "$(ft_r0kh_entry "$_key")"
 		plan_list "$_p.r1kh" "$(ft_r1kh_entry "$_key")"
-		# R0KH-ID must be unique per BSS: derive it from the BSSID unless
-		# the administrator configured one (OpenWrt 25.x sets no default)
-		_bssid=$(caps_get "iface.$_s.bssid")
-		if [ -n "$_bssid" ] && [ "$(caps_get uciopt.nasid)" != 0 ] &&
-			[ -z "$(caps_get "iface.$_s.uci_nasid")" ]; then
-			plan_set "$_p.nasid" "$(printf '%s' "$_bssid" | tr -d ':')"
-		fi
 		;;
 	esac
+	# R0KH-ID (nas_identifier) must be unique per BSS in every FT mode.
+	# OpenWrt 25.12 hostapd.uc already defaults it to the BSSID without
+	# colons; roamctl writes the same value explicitly (visible in UCI,
+	# independent of the wifi script version) unless one is configured.
+	_bssid=$(caps_get "iface.$_s.bssid")
+	if [ -n "$_bssid" ] && [ "$(caps_get uciopt.nasid)" != 0 ] &&
+		[ -z "$(caps_get "iface.$_s.uci_nasid")" ]; then
+		plan_set "$_p.nasid" "$(printf '%s' "$_bssid" | tr -d ':')"
+	fi
 	if [ -n "${ORM_REASSOC_DEADLINE:-}" ] && [ "$(caps_get uciopt.reassociation_deadline)" != 0 ]; then
 		plan_set "$_p.reassociation_deadline" "$ORM_REASSOC_DEADLINE"
 	fi

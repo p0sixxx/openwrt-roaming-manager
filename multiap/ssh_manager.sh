@@ -96,8 +96,9 @@ ssh_exec() {
 		;;
 	dropbear)
 		# -y: accept and remember an unknown host key (TOFU), reject changes
+		# BatchMode: never prompt for a password (no "timeout" on OpenWrt)
 		# shellcheck disable=SC2086
-		$_tw ssh -T -y -i "$_id" -p "$_p" "$_u@$_h" "$_cmd"
+		$_tw ssh -T -y -o BatchMode=yes -i "$_id" -p "$_p" "$_u@$_h" "$_cmd"
 		;;
 	*) return 255 ;;
 	esac
