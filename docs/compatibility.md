@@ -104,7 +104,7 @@ package before removing the old one.
 
 | Backend | Package | OpenWrt feed | Notes |
 |---|---|---|---|
-| usteer | `usteer` | core packages | default; options verified through `ubus call usteer get_config`; `aggressiveness` (newer versions) is used to restrict steering to BTM recommendations |
+| usteer | `usteer` | core packages | default; options verified through `ubus call usteer get_config`; `aggressiveness` exists only in usteer master (not in the 24.10/25.12 feeds) and restricts steering to BTM recommendations; without it the roam trigger (`roam_scan_snr`/`roam_trigger_snr`) kicks clients after `roam_kick_delay`, so roamctl disables it except in the aggressive profile |
 | DAWN | `dawn` | packages feed | alternative; option names located in the installed `/etc/config/dawn` |
 | native | built in | — | used when no package can be installed |
 

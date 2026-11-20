@@ -38,8 +38,31 @@ project uses [Semantic Versioning](https://semver.org/).
 - Option support is read from the ucode schema when present; the unused
   legacy shell handler made roamctl write `ieee80211v`, which 25.12 does
   not have.
-- `nasid` (R0KH-ID) is set from the BSSID in shared FT key mode
-  (WPA3/SAE), as 25.12 sets no default.
+- `nasid` (R0KH-ID) is set from the BSSID in every FT key mode
+  (FT-PSK included) unless the administrator set one. This is the value
+  25.12 `hostapd.uc` uses by default; writing it makes it explicit.
+- Wi-Fi backend replacement on apk (25.12) installs the fetched package
+  file with `--allow-untrusted`: OpenWrt signs only the repository index,
+  so apk v3 rejected the local file as UNTRUSTED after the old wpad had
+  already been removed. `apk fetch` verifies the file against the signed
+  index. The old package is fetched as well and restored from that file,
+  without network access, if the new one fails to install.
+- usteer of the 24.10/25.12 feeds (2022-08-18 / 2025-10-04) has no
+  `aggressiveness`; its roam state machine, enabled by `roam_scan_snr` or
+  `roam_trigger_snr`, kicks clients `roam_kick_delay` after a BTM request,
+  BTM capable or not. roamctl set `roam_scan_snr` unconditionally and so
+  enabled kicks in the safe profiles; both are now 0 there (only the
+  aggressive profile enables them). Mock usteer reports the release
+  option set; the master set is a separate fixture.
+- usteer `network` is an init-script option missing from `get_config` and
+  was therefore never written; it is now always set.
+- Deployment docs: the NX30 LAN address is set as `192.168.1.2/24`
+  (25.12 stores `ipaddr` as a CIDR list; without a prefix netifd uses
+  /32).
+- Dropbear SSH client runs with `-o BatchMode=yes` (supported by
+  dropbear 2025.89 in 25.12): a member without the controller's key fails
+  at once instead of waiting for a password prompt; OpenWrt has no
+  `timeout` applet to bound it otherwise.
 - Corrected usteer documentation: noise floor per radio; the aggressive
   profile (usteer aggressiveness 2) does disconnect clients.
 

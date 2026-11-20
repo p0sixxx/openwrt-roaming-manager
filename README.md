@@ -347,6 +347,10 @@ service states and offers to remove packages roamctl installed.
 * Roaming decisions are made by clients; many IoT devices ignore
   802.11k/v and some old clients mishandle 802.11r (exclude them or use
   a separate SSID).
+* usteer of the OpenWrt 24.10/25.12 feeds has no `aggressiveness`: its
+  AP-to-AP roam trigger always ends in a kick, so roamctl leaves it off
+  (except in the aggressive profile). usteer then distributes neighbor
+  reports and band-steers BTM clients; the client chooses when to roam.
 * usteer thresholds are global (SNR based with per-band noise
   assumptions); per-client exclusion needs a usteer version with
   `aggressiveness_mac_list`.
