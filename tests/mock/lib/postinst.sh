@@ -6,6 +6,13 @@ case "$1" in
 wpad-mbedtls | wpad-wolfssl | wpad-openssl | wpad | hostapd-mbedtls | hostapd-wolfssl | hostapd-openssl)
 	# full variant: built with WNM (802.11v)
 	sed -i 's/^SC_WNM=.*/SC_WNM=1/' "$MOCK_DIR/scenario.env"
+	# and with 802.11r, SAE and EAP ("hostapd -v11r" etc.)
+	for f in 11r sae eap; do
+		if ! grep -qw "$f" "$MOCK_DIR/hostapd_features" 2>/dev/null; then
+			printf '%s %s\n' "$(cat "$MOCK_DIR/hostapd_features" 2>/dev/null)" "$f" >"$MOCK_DIR/hostapd_features.tmp"
+			mv -f "$MOCK_DIR/hostapd_features.tmp" "$MOCK_DIR/hostapd_features"
+		fi
+	done
 	# test hook: this package breaks every radio
 	if grep -qx "$1" "$MOCK_DIR/pkg/break_wifi_after" 2>/dev/null; then
 		sed -i 's/^SC_WIFI_FAIL=.*/SC_WIFI_FAIL=1/' "$MOCK_DIR/scenario.env"

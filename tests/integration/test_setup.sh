@@ -28,7 +28,12 @@ test_setup_filogic_2410() {
 	assert_contains "$ERR" "CONFIGURATION VERIFIED — LIVE ROAMING NOT TESTED"
 	assert_contains "$ERR" "Backup:        CREATED"
 	[ -n "$(ls "$ORM_SYSROOT"/etc/roamctl/backups/*.tar.gz 2>/dev/null)" ] || fail "backup archive missing"
-	assert_eq 1 "$(fx_uci get usteer.@usteer[0].aggressiveness)" "usteer BTM-only aggressiveness"
+	# usteer of the 24.10/25.12 feeds has no "aggressiveness": its roam
+	# trigger would kick clients, so it stays off in the default profile
+	assert_eq "" "$(fx_uci -q get usteer.@usteer[0].aggressiveness)" "option unknown to release usteer not written"
+	assert_eq 0 "$(fx_uci get usteer.@usteer[0].roam_scan_snr)" "no roam state machine (it kicks)"
+	assert_eq 0 "$(fx_uci get usteer.@usteer[0].roam_trigger_snr)"
+	assert_eq lan "$(fx_uci get usteer.@usteer[0].network)" "init-script option written"
 	assert_eq HomeNet "$(fx_uci get usteer.@usteer[0].ssid_list)" "usteer limited to roaming SSID"
 	assert_eq 1 "$(fx_uci get usteer.@usteer[0].local_mode)" "standalone usteer"
 	assert_eq 0 "$(fx_uci get usteer.@usteer[0].min_snr)" "no low-signal kicks"
@@ -152,11 +157,20 @@ test_no_80211r_support() {
 test_wpad_mini_nothing_supported() {
 	FXO_SC_FEATURES="" FXO_SC_WPAD=wpad-mini fx_new filogic-2410
 	before=$(cat "$ORM_SYSROOT/etc/config/wireless")
-	rc_run -y setup
+	rc_run -y --keep-wpad setup
 	assert_ne 0 "$RC"
 	assert_eq "$before" "$(cat "$ORM_SYSROOT/etc/config/wireless")"
 	rc_run audit
 	assert_contains "$ERR" "wpad-mini lacks 802.11k/v"
+}
+
+test_wpad_mini_replaced_by_default() {
+	FXO_SC_FEATURES="" FXO_SC_WPAD=wpad-mini fx_new filogic-2410
+	rc_run -y setup
+	assert_rc 0 "$RC"
+	assert_contains "$(cat "$MOCK_DIR/pkg/installed")" "wpad-mbedtls"
+	assert_not_contains "$(cat "$MOCK_DIR/pkg/installed")" "wpad-mini"
+	assert_eq 1 "$(fx_uci get wireless.default_radio0.ieee80211r)"
 }
 
 test_package_install_failure_falls_back() {
@@ -227,4 +241,14 @@ test_native_backend_sends_btm() {
 	assert_contains "$act" '"neighbors":["0211223300008f0900005101'"0e"'"]'
 	assert_not_contains "$act" "02:aa:00:00:00:02" "legacy client never touched"
 	assert_eq 1 "$(echo "$act" | grep -c bss_transition_request)" "cooldown prevents repeated requests"
+}
+
+test_setup_usteer_master_aggressiveness() {
+	# usteer master (not in a release feed yet) reports "aggressiveness"
+	export MOCK_USTEER_CONFIG="$MOCK_LIB/usteer_get_config_master.json"
+	fx_new filogic-2410
+	rc_run -y setup
+	unset MOCK_USTEER_CONFIG
+	assert_rc 0 "$RC"
+	assert_eq 1 "$(fx_uci get usteer.@usteer[0].aggressiveness)" "BTM recommendation only"
 }

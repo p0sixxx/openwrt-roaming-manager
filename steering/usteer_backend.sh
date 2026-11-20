@@ -12,10 +12,13 @@
 # floor of each radio as reported by hostapd (-95 dBm if unknown), which
 # yields per-radio signal thresholds from one setting.
 #
-# aggressiveness (usteer policy.c): 0 no roam actions, 1 BTM request
-# without "disassociation imminent" (recommendation only), 2 BTM with
+# aggressiveness (usteer policy.c, usteer master only - not in the 24.10
+# and 25.12 package feeds): 0 no roam actions, 1 BTM request without
+# "disassociation imminent" (recommendation only), 2 BTM with
 # disassociation imminent and a kick after roam_kick_delay, 3 adds a
 # disassociation timer. roamctl uses 1 except in the aggressive profile.
+# Without it the roam trigger always ends in a kick, so safe profiles
+# disable it (see usteer_be_configure).
 #
 # Only options reported by the running usteer ("ubus call usteer
 # get_config") are written, so unknown/renamed options of other usteer
@@ -101,7 +104,9 @@ usteer_be_configure() {
 	_net=$(caps_get "iface.$(orch_managed_ifaces | head -n1).network" lan)
 	_net=${_net%% *}
 	_ssids=$(orch_managed_ssids | while IFS= read -r _x; do [ -n "$_x" ] && printf '%s%s' "$_x" "$ORM_FS"; done)
-	_set network "${_net:-lan}"
+	# "network" is read by the usteer init script only and is not part of
+	# "ubus call usteer get_config": always write it
+	plan_set "$_p.network" "${_net:-lan}"
 	_aps=$(caps_get opt.aps 1)
 	if [ "$_aps" -le 1 ]; then _set local_mode 1; else _set local_mode 0; fi
 	if usteer_has_key ssid_list && [ -n "$_ssids" ]; then
@@ -118,8 +123,8 @@ usteer_be_configure() {
 	_hy=$(caps_get opt.hyst_5g 6)
 	_ag=$(caps_get opt.usteer_aggressiveness 1)
 	_set signal_diff_threshold "$_hy"
-	_set roam_scan_snr "$(usteer_snr $((_min5 + 3)))"
 	if usteer_has_key aggressiveness; then
+		_set roam_scan_snr "$(usteer_snr $((_min5 + 3)))"
 		_set aggressiveness "$_ag"
 		if [ "$_ag" -ge 1 ] && [ "$_aps" -ge 2 ]; then
 			_set roam_trigger_snr "$(usteer_snr "$_min5")"
@@ -135,12 +140,19 @@ usteer_be_configure() {
 			fi
 		fi
 	else
-		# Without aggressiveness control usteer's roam trigger may kick
-		# clients that ignore BTM - keep it disabled in safe profiles.
+		# usteer of the OpenWrt 24.10/25.12 feeds (2022-08-18, 2025-10-04)
+		# has no "aggressiveness": once roam_scan_snr or roam_trigger_snr
+		# is set, its roam state machine sends a BTM request with
+		# "disassociation imminent" and kicks the client roam_kick_delay
+		# later, BTM capable or not (policy.c usteer_roam_trigger_sm).
+		# Safe profiles keep both disabled: usteer then distributes
+		# neighbor reports and band-steers BTM clients without kicking.
 		if [ "$(caps_get opt.kick_mode none)" = none ]; then
+			_set roam_scan_snr 0
 			_set roam_trigger_snr 0
-			caps_set steer.usteer.note "usteer without 'aggressiveness': active roam trigger disabled to avoid forced disconnects"
+			caps_set steer.usteer.note "usteer without 'aggressiveness': AP roam trigger disabled (it would kick clients); neighbor reports and band steering stay active"
 		else
+			_set roam_scan_snr "$(usteer_snr $((_min5 + 3)))"
 			_set roam_trigger_snr "$(usteer_snr "$_min5")"
 		fi
 	fi

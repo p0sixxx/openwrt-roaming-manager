@@ -48,7 +48,7 @@ diag_hardware() {
 			[ "$(caps_get "hostapd.feat.$_f")" = 1 ] && _fe="$_fe $_f"
 		done
 		report_add hardware "hostapd" PASS "$(caps_get hostapd.package) v$(caps_get hostapd.version), features:${_fe:- none detected}"
-		[ "$(caps_get hostapd.variant)" = mini ] && report_add hardware "hostapd variant" WARN "wpad-mini lacks 802.11k/v; consider wpad-basic-mbedtls (roamctl backend replace)"
+		[ "$(caps_get hostapd.variant)" = mini ] && report_add hardware "hostapd variant" WARN "wpad-mini lacks 802.11k/v; use the full wpad-mbedtls (roamctl setup replaces it unless --keep-wpad)"
 	fi
 	for _f in 11k 11v 11r; do
 		case "$(caps_get "compat.$_f")" in
