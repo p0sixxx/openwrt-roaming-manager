@@ -7,6 +7,14 @@ OpenWrt 25.12 (ucode-скрипты Wi-Fi `ap.uc` и схема
 **Всё выполнять с ПК, подключённого кабелем.** Wi-Fi на точке будет
 пропадать на время шагов 2 и 3.
 
+Адреса в этом гайде:
+
+| Устройство | Адрес | Роль |
+|---|---|---|
+| Routerich AX3000 | `192.168.73.1/24` | основной роутер: шлюз, DNS, DHCP |
+| Netis NX30 V2 | `192.168.73.3/24` | вторая точка («тупая» AP), без DHCP |
+| Netis NX30 V2 до шага 1.4 | `192.168.1.1` | адрес по умолчанию |
+
 ---
 
 ## 1. Подготовка (на каждой точке)
@@ -19,10 +27,17 @@ OpenWrt 25.12 (ucode-скрипты Wi-Fi `ap.uc` и схема
 sysupgrade -b /tmp/backup-before-roaming.tar.gz
 ```
 
-На ПК (для Routerich — `192.168.1.1`, для NX30 — `192.168.1.2`):
+На ПК, Routerich:
 
 ```bash
-scp -O root@192.168.1.1:/tmp/backup-before-roaming.tar.gz .
+scp -O root@192.168.73.1:/tmp/backup-before-roaming.tar.gz backup-routerich.tar.gz
+```
+
+NX30 — до шага 1.4, пока ПК подключён кабелем к его LAN и у него адрес
+по умолчанию:
+
+```bash
+scp -O root@192.168.1.1:/tmp/backup-before-roaming.tar.gz backup-nx30.tar.gz
 ```
 
 ### 1.2 Проверить имена секций и радио
@@ -53,8 +68,23 @@ uci show wireless | grep -E '\.ssid=|\.encryption=|\.country=|\.channel='
 
 ### 1.4 NX30 как вторая точка («тупая» AP)
 
-Выполнить на NX30 **до** подключения к Routerich (у обоих по умолчанию
-192.168.1.1):
+Сначала, пока ПК ещё в сети Routerich, убедиться, что `192.168.73.3`
+свободен: он вне пула DHCP Routerich (LuCI → Network → Interfaces → LAN
+→ DHCP Server; например, при `start=100`, `limit=150` пул —
+192.168.73.100–249) и не занят статической арендой (Network → DHCP and
+DNS → Static Leases). Адрес не должен отвечать, и его не должно быть в
+ARP-таблице ПК:
+
+```bash
+ping -n 2 192.168.73.3
+```
+
+```bash
+arp -a
+```
+
+Затем подключить ПК кабелем к LAN NX30 (NX30 ещё на 192.168.1.1, к
+Routerich **не** подключён) и выполнить на NX30.
 
 В 25.12 адрес LAN хранится списком в формате `адрес/префикс`
 (`list ipaddr '192.168.1.1/24'`), поэтому старый адрес удаляется и
@@ -68,9 +98,9 @@ uci show network.lan
 ```bash
 uci -q delete network.lan.ipaddr
 uci -q delete network.lan.netmask
-uci add_list network.lan.ipaddr='192.168.1.2/24'
-uci set network.lan.gateway='192.168.1.1'
-uci add_list network.lan.dns='192.168.1.1'
+uci add_list network.lan.ipaddr='192.168.73.3/24'
+uci set network.lan.gateway='192.168.73.1'
+uci add_list network.lan.dns='192.168.73.1'
 uci set dhcp.lan.ignore='1'
 uci commit network
 uci commit dhcp
@@ -78,10 +108,27 @@ uci commit dhcp
 reboot
 ```
 
-Затем соединить LAN NX30 с LAN Routerich и проверить с Routerich:
+Затем соединить LAN NX30 с LAN Routerich (WAN-порт NX30 не
+использовать), подключить ПК к Routerich и проверить с Routerich:
 
 ```bash
-ping -c 3 192.168.1.2
+ping -c 3 192.168.73.3
+```
+
+С ПК (Windows) и доступ по SSH:
+
+```bash
+ping -n 3 192.168.73.3
+```
+
+```bash
+ssh root@192.168.73.3
+```
+
+На NX30 — выход в интернет через Routerich:
+
+```bash
+ping -c 2 downloads.openwrt.org && apk update
 ```
 
 ---
@@ -336,12 +383,18 @@ sysupgrade -r /tmp/backup-before-roaming.tar.gz && reboot
 файла там нет — скопировать с ПК (адрес точки — текущий):
 
 ```bash
-scp -O backup-before-roaming.tar.gz root@192.168.1.2:/tmp/
+scp -O backup-nx30.tar.gz root@192.168.73.3:/tmp/backup-before-roaming.tar.gz
 ```
 
-Backup NX30 сделан до шага 1.4, поэтому его восстановление вернёт NX30 и
-прежний адрес 192.168.1.1 с DHCP-сервером — отключите её от Routerich
-перед этим.
+```bash
+scp -O backup-routerich.tar.gz root@192.168.73.1:/tmp/backup-before-roaming.tar.gz
+```
+
+Backup NX30 сделан до шага 1.4, поэтому его восстановление вернёт NX30
+прежний адрес 192.168.1.1 и DHCP-сервер — отключите NX30 от Routerich
+перед этим, иначе в сети 192.168.73.0/24 появится второй DHCP-сервер.
+После перезагрузки NX30 доступен по 192.168.1.1 с ПК, подключённого
+кабелем напрямую к нему.
 
 Вернуть basic wpad (не обязательно, полный работает и без роуминга):
 
